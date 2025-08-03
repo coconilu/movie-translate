@@ -58,7 +58,7 @@
 │                        外部服务层 (External)                     │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │  第三方API                                             │   │
-│  │  • 语音识别API (Whisper, Azure, Google)               │   │
+│  │  • 语音识别API (SenseVoice, 百度语音)                 │   │
 │  │  • 翻译API (DeepSeek, GLM-4.5)                        │   │
 │  │  • 声音克隆API (本地模型)                             │   │
 │  └─────────────────────────────────────────────────────────┘   │
@@ -223,9 +223,8 @@ movie-translate/
 │
 ├── ml-services/                # 机器学习服务
 │   ├── speech_recognition/     # 语音识别
-│   │   ├── whisper/            # Whisper模型
-│   │   ├── sense_voice/        # SenseVoice模型
-│   │   └── azure/              # Azure服务
+│   │   ├── sense_voice/        # SenseVoice模型（本地）
+│   │   └── baidu/              # 百度语音API
 │   ├── translation/            # 翻译服务
 │   │   ├── deepseek/           # DeepSeek模型
 │   │   ├── glm/                # GLM模型
@@ -309,8 +308,7 @@ movie-translate/
 ### 3.3 机器学习技术栈
 | 技术类别 | 选择 | 理由 |
 |---------|------|------|
-| **语音识别** | Whisper (OpenAI) | 高准确率，支持多语言 |
-| **备选方案** | SenseVoice, Paraformer | 中文优化，本地部署 |
+| **语音识别** | SenseVoice (阿里) | 中文优化，本地部署，5090显卡加速 |
 | **翻译模型** | DeepSeek R1 | 高质量翻译，支持上下文 |
 | **备选方案** | GLM-4.5 | 中文优化，专业术语 |
 | **声音克隆** | XTTS, VITS | 开源声音克隆模型 |
@@ -536,12 +534,11 @@ class MediaService:
 class SpeechRecognitionService:
     def __init__(self):
         self.models = {
-            'whisper': WhisperModel(),
-            'azure': AzureSpeechService(),
-            'google': GoogleSpeechService()
+            'sense_voice': SenseVoiceModel(),  # 本地模型
+            'baidu': BaiduSpeechService()     # 云端API
         }
     
-    async def transcribe(self, audio_path: str, model: str = 'whisper') -> SRTResult:
+    async def transcribe(self, audio_path: str, model: str = 'sense_voice') -> SRTResult:
         """语音识别转字幕"""
         # 1. 选择模型
         # 2. 预处理音频
@@ -848,7 +845,7 @@ def build_desktop_app():
         "--icon=resources/icons/app.ico",
         "--hidden-import=pydub",
         "--hidden-import=librosa",
-        "--hidden-import=whisper",
+        "--hidden-import=sense_voice",
         "app/main.py"
     ]
     subprocess.run(cmd)
@@ -1014,11 +1011,25 @@ if __name__ == "__main__":
 - **流式处理**：大文件流式处理
 - **串行处理**：一次只处理一个文件，确保系统稳定性
 
-### 8.4 资源优化
+### 8.4 SenseVoice本地部署优化
+- **GPU加速**：充分利用5090显卡的24GB显存
+- **模型优化**：使用TensorRT加速推理，FP16精度
+- **批处理**：支持多音频片段并行处理
+- **显存管理**：模型预加载，避免重复加载开销
+- **缓存机制**：相似音频复用识别结果
+
+### 8.5 资源优化
 - **内存管理**：及时释放不再使用的资源
 - **GPU优化**：合理使用GPU加速
 - **文件清理**：定期清理临时文件
 - **监控告警**：实时监控系统资源使用情况
+
+### 8.6 百度语音API集成优化
+- **智能切换**：本地处理失败时自动切换百度API
+- **限流控制**：合理控制API调用频率，避免超额
+- **成本监控**：实时统计API调用成本
+- **容错机制**：网络异常时的重试和降级策略
+- **质量评估**：对比本地和云端识别质量，动态选择
 
 ## 9. 安全考虑
 
