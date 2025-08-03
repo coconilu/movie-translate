@@ -559,22 +559,194 @@ class TranslationService:
     def __init__(self):
         self.models = {
             'deepseek': DeepSeekModel(),
-            'glm': GLMModel(),
-            'google': GoogleTranslate()
+            'glm': GLMModel()
         }
-    
-    async def translate(self, text: str, target_lang: str = 'zh') -> str:
-        """翻译文本"""
-        # 1. 选择模型
-        # 2. 分段处理（长文本）
-        # 3. 执行翻译
-        # 4. 后处理优化
-        pass
+        self.cache_manager = TranslationCacheManager()
+        self.srt_processor = SRTProcessor()
     
     async def translate_srt(self, srt_path: str, target_lang: str = 'zh') -> str:
-        """翻译SRT文件"""
-        # 保持时间戳，只翻译内容
+        """翻译SRT文件 - 本地预处理+线上翻译方案"""
+        # 1. 解析SRT文件
+        srt_data = await self.srt_processor.parse_srt(srt_path)
+        
+        # 2. 文本预处理
+        processed_text = await self.srt_processor.preprocess_text(srt_data)
+        
+        # 3. 检查翻译缓存
+        cached_result = await self.cache_manager.get_cached_translation(
+            processed_text, target_lang
+        )
+        if cached_result:
+            return cached_result
+        
+        # 4. 批量翻译处理
+        translated_chunks = await self._batch_translate(
+            processed_text, target_lang
+        )
+        
+        # 5. 重新组装SRT格式
+        result_srt = await self.srt_processor.assemble_srt(
+            srt_data, translated_chunks
+        )
+        
+        # 6. 保存翻译缓存
+        await self.cache_manager.save_translation(
+            processed_text, translated_chunks, target_lang
+        )
+        
+        return result_srt
+    
+    async def _batch_translate(self, text_chunks: List[str], target_lang: str) -> List[str]:
+        """批量翻译文本块"""
+        # 1. 智能分段（考虑上下文连贯性）
+        chunks = self._smart_chunking(text_chunks)
+        
+        # 2. 并发翻译控制
+        tasks = []
+        for chunk in chunks:
+            task = self._translate_chunk(chunk, target_lang)
+            tasks.append(task)
+        
+        # 3. 执行翻译（控制并发数）
+        results = await self._concurrent_translate(tasks)
+        
+        return results
+    
+    async def _translate_chunk(self, chunk: str, target_lang: str) -> str:
+        """翻译单个文本块"""
+        # 1. 选择最优模型
+        model = self._select_optimal_model(chunk, target_lang)
+        
+        # 2. 执行翻译
+        result = await model.translate(chunk, target_lang)
+        
+        # 3. 后处理优化
+        return self._post_process_translation(result)
+    
+    def resume_translation(self, srt_path: str, checkpoint_path: str) -> str:
+        """断点续传翻译"""
+        # 从检查点恢复翻译进度
         pass
+```
+
+### 4.4 SRT预处理模块
+```python
+# srt_processor.py
+class SRTProcessor:
+    def __init__(self):
+        self.max_chunk_size = 2000  # 单次翻译最大字符数
+        self.context_window = 3     # 上下文窗口大小
+    
+    async def parse_srt(self, srt_path: str) -> List[SRTEntry]:
+        """解析SRT文件"""
+        entries = []
+        with open(srt_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # 解析SRT格式
+        blocks = content.split('\n\n')
+        for block in blocks:
+            if block.strip():
+                entry = self._parse_srt_block(block)
+                entries.append(entry)
+        
+        return entries
+    
+    async def preprocess_text(self, srt_data: List[SRTEntry]) -> List[TextChunk]:
+        """文本预处理"""
+        # 1. 提取纯文本
+        texts = [entry.text for entry in srt_data]
+        
+        # 2. 去重处理
+        unique_texts = self._remove_duplicates(texts)
+        
+        # 3. 智能分段
+        chunks = self._smart_chunking(unique_texts)
+        
+        # 4. 添加上下文信息
+        enriched_chunks = self._add_context(chunks, srt_data)
+        
+        return enriched_chunks
+    
+    def _smart_chunking(self, texts: List[str]) -> List[TextChunk]:
+        """智能分段"""
+        chunks = []
+        current_chunk = ""
+        
+        for text in texts:
+            # 考虑句子完整性
+            if len(current_chunk + text) <= self.max_chunk_size:
+                current_chunk += text + " "
+            else:
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                current_chunk = text + " "
+        
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+        
+        return chunks
+    
+    async def assemble_srt(self, original_data: List[SRTEntry], 
+                          translated_chunks: List[str]) -> str:
+        """重新组装SRT格式"""
+        # 将翻译结果映射回原始SRT结构
+        result = []
+        
+        for i, entry in enumerate(original_data):
+            translated_text = self._map_translation(entry.text, translated_chunks)
+            srt_block = self._format_srt_entry(
+                entry.index, entry.start_time, entry.end_time, translated_text
+            )
+            result.append(srt_block)
+        
+        return '\n\n'.join(result)
+```
+
+### 4.5 翻译缓存管理模块
+```python
+# translation_cache_manager.py
+class TranslationCacheManager:
+    def __init__(self):
+        self.cache_db = TranslationCacheDB()
+        self.hash_generator = TextHashGenerator()
+    
+    async def get_cached_translation(self, text_hash: str, target_lang: str) -> Optional[str]:
+        """获取缓存的翻译结果"""
+        cache_key = f"{text_hash}_{target_lang}"
+        return await self.cache_db.get_cache(cache_key)
+    
+    async def save_translation(self, original_hash: str, translated_text: str, 
+                            target_lang: str, metadata: Dict = None):
+        """保存翻译缓存"""
+        cache_key = f"{original_hash}_{target_lang}"
+        cache_data = {
+            'original_hash': original_hash,
+            'translated_text': translated_text,
+            'target_lang': target_lang,
+            'created_at': datetime.now(),
+            'metadata': metadata or {}
+        }
+        await self.cache_db.save_cache(cache_key, cache_data)
+    
+    async def create_checkpoint(self, srt_path: str, progress: Dict):
+        """创建翻译检查点"""
+        checkpoint_data = {
+            'srt_path': srt_path,
+            'progress': progress,
+            'timestamp': datetime.now(),
+            'translated_chunks': progress.get('translated_chunks', []),
+            'current_position': progress.get('current_position', 0)
+        }
+        await self.cache_db.save_checkpoint(srt_path, checkpoint_data)
+    
+    async def load_checkpoint(self, srt_path: str) -> Optional[Dict]:
+        """加载翻译检查点"""
+        return await self.cache_db.get_checkpoint(srt_path)
+    
+    def generate_text_hash(self, text: str) -> str:
+        """生成文本哈希值"""
+        return self.hash_generator.generate_hash(text)
 ```
 
 ### 4.4 角色识别模块
@@ -600,7 +772,55 @@ class CharacterService:
         pass
 ```
 
-### 4.5 声音克隆模块
+### 4.6 翻译缓存数据库设计
+```sql
+-- 翻译缓存表
+CREATE TABLE translation_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    text_hash VARCHAR(64) NOT NULL,
+    original_text TEXT NOT NULL,
+    translated_text TEXT NOT NULL,
+    source_lang VARCHAR(10) NOT NULL,
+    target_lang VARCHAR(10) NOT NULL,
+    model_used VARCHAR(50),
+    quality_score REAL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    access_count INTEGER DEFAULT 0,
+    UNIQUE(text_hash, source_lang, target_lang)
+);
+
+-- 翻译检查点表
+CREATE TABLE translation_checkpoints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    srt_path VARCHAR(500) NOT NULL,
+    progress_data TEXT NOT NULL,  -- JSON格式
+    current_position INTEGER DEFAULT 0,
+    total_chunks INTEGER DEFAULT 0,
+    translated_chunks TEXT,         -- JSON格式
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(srt_path)
+);
+
+-- 翻译任务表
+CREATE TABLE translation_tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id VARCHAR(64) UNIQUE NOT NULL,
+    srt_path VARCHAR(500) NOT NULL,
+    source_lang VARCHAR(10) NOT NULL,
+    target_lang VARCHAR(10) NOT NULL,
+    status VARCHAR(20) DEFAULT 'pending',
+    progress INTEGER DEFAULT 0,
+    total_chunks INTEGER DEFAULT 0,
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP
+);
+```
+
+### 4.7 声音克隆模块
 ```python
 # voice_cloning_service.py
 class VoiceCloningService:
@@ -1030,6 +1250,15 @@ if __name__ == "__main__":
 - **成本监控**：实时统计API调用成本
 - **容错机制**：网络异常时的重试和降级策略
 - **质量评估**：对比本地和云端识别质量，动态选择
+
+### 8.7 翻译性能优化策略
+- **智能分段**：基于语义完整性进行文本分段，保持上下文连贯性
+- **并发控制**：合理控制并发翻译请求数，避免API限流
+- **缓存命中**：哈希比对快速识别重复内容，减少重复翻译
+- **断点续传**：定期保存翻译进度，支持大文件中断恢复
+- **增量翻译**：仅翻译新增或修改的内容，提高效率
+- **批处理优化**：将小文本块合并处理，减少API调用次数
+- **内存管理**：流式处理大文件，避免内存溢出
 
 ## 9. 安全考虑
 
