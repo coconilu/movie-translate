@@ -108,17 +108,37 @@ movie-translate/
 │   │   │   ├── ui/             # 基础UI组件
 │   │   │   ├── video/          # 视频相关组件
 │   │   │   ├── character/      # 角色管理组件
+│   │   │   ├── steps/          # 步骤导航组件
+│   │   │   │   ├── StepNavigator/    # 步骤导航器
+│   │   │   │   ├── StepDetails/      # 步骤详情面板
+│   │   │   │   ├── StepStatus/       # 步骤状态显示
+│   │   │   │   └── StepControls/     # 步骤控制按钮
+│   │   │   ├── cache/          # 缓存管理组件
+│   │   │   │   ├── CacheManager/     # 缓存管理器
+│   │   │   │   ├── CacheStatus/      # 缓存状态显示
+│   │   │   │   └── CacheControls/    # 缓存控制按钮
 │   │   │   └── common/         # 通用组件
 │   │   ├── pages/              # 页面组件
 │   │   │   ├── home/           # 首页
+│   │   │   │   ├── components/      # 首页组件
+│   │   │   │   ├── hooks/            # 首页Hooks
+│   │   │   │   └── styles/           # 首页样式
 │   │   │   ├── video/          # 视频处理页
 │   │   │   ├── characters/      # 角色管理页
 │   │   │   ├── settings/       # 设置页
 │   │   │   └── history/        # 历史记录页
 │   │   ├── hooks/              # 自定义Hooks
+│   │   │   ├── useStepManager/  # 步骤管理Hook
+│   │   │   ├── useCacheManager/ # 缓存管理Hook
+│   │   │   ├── useProcessState/ # 处理状态Hook
+│   │   │   └── useInterruptHandler/ # 中断处理Hook
 │   │   ├── services/           # API服务
 │   │   ├── utils/              # 工具函数
 │   │   ├── store/              # 状态管理
+│   │   │   ├── steps/          # 步骤状态
+│   │   │   ├── cache/          # 缓存状态
+│   │   │   ├── process/        # 处理状态
+│   │   │   └── ui/             # UI状态
 │   │   └── types/              # TypeScript类型定义
 │   ├── public/                 # 静态资源
 │   ├── package.json
@@ -142,7 +162,11 @@ movie-translate/
 │   │   │   ├── audio_service.py
 │   │   │   ├── translation_service.py
 │   │   │   ├── character_service.py
-│   │   │   └── voice_service.py
+│   │   │   ├── voice_service.py
+│   │   │   ├── step_manager.py     # 步骤管理服务
+│   │   │   ├── cache_manager.py    # 缓存管理服务
+│   │   │   ├── interrupt_handler.py # 中断处理服务
+│   │   │   └── process_orchestrator.py # 处理编排服务
 │   │   ├── models/             # 数据模型
 │   │   │   ├── video.py
 │   │   │   ├── audio.py
@@ -275,13 +299,175 @@ movie-translate/
 
 ## 4. 核心模块设计
 
-### 4.1 视频处理模块
+### 4.1 步骤管理模块
+```python
+# step_manager.py
+class StepManager:
+    def __init__(self):
+        self.steps = [
+            Step(name="文件导入", handler="file_import"),
+            Step(name="音频处理", handler="audio_process"),
+            Step(name="语音识别", handler="speech_recognition"),
+            Step(name="翻译处理", handler="translation"),
+            Step(name="角色识别", handler="character_recognition"),
+            Step(name="配音生成", handler="voice_synthesis")
+        ]
+        self.current_step = 0
+        self.step_states = {}
+    
+    async def execute_step(self, step_id: int, context: ProcessContext) -> StepResult:
+        """执行指定步骤"""
+        step = self.steps[step_id]
+        handler = self.get_handler(step.handler)
+        
+        # 检查缓存
+        cache_result = await self.cache_manager.get_step_cache(step_id, context)
+        if cache_result:
+            return cache_result
+        
+        # 执行步骤
+        result = await handler.execute(context)
+        
+        # 保存缓存
+        await self.cache_manager.save_step_cache(step_id, context, result)
+        
+        return result
+    
+    async def pause_step(self, step_id: int) -> bool:
+        """暂停指定步骤"""
+        # 实现暂停逻辑
+        pass
+    
+    async def resume_step(self, step_id: int) -> bool:
+        """恢复指定步骤"""
+        # 实现恢复逻辑
+        pass
+    
+    async def interrupt_step(self, step_id: int, save_progress: bool = True) -> bool:
+        """中断指定步骤"""
+        # 实现中断逻辑
+        pass
+```
+
+### 4.2 缓存管理模块
+```python
+# cache_manager.py
+class CacheManager:
+    def __init__(self):
+        self.cache_dir = "cache/"
+        self.step_cache = {}
+    
+    async def save_step_cache(self, step_id: int, context: ProcessContext, result: StepResult):
+        """保存步骤缓存"""
+        cache_key = self._generate_cache_key(step_id, context)
+        cache_path = os.path.join(self.cache_dir, f"step_{step_id}_{cache_key}")
+        
+        # 保存结果到缓存
+        await self._save_to_cache(cache_path, result)
+        
+        # 更新缓存索引
+        self.step_cache[cache_key] = {
+            "step_id": step_id,
+            "context": context,
+            "cache_path": cache_path,
+            "created_at": datetime.now(),
+            "size": os.path.getsize(cache_path)
+        }
+    
+    async def get_step_cache(self, step_id: int, context: ProcessContext) -> Optional[StepResult]:
+        """获取步骤缓存"""
+        cache_key = self._generate_cache_key(step_id, context)
+        
+        if cache_key in self.step_cache:
+            cache_info = self.step_cache[cache_key]
+            return await self._load_from_cache(cache_info["cache_path"])
+        
+        return None
+    
+    async def clear_step_cache(self, step_id: int, context: ProcessContext):
+        """清理步骤缓存"""
+        cache_key = self._generate_cache_key(step_id, context)
+        
+        if cache_key in self.step_cache:
+            cache_info = self.step_cache[cache_key]
+            os.remove(cache_info["cache_path"])
+            del self.step_cache[cache_key]
+    
+    def get_cache_status(self) -> Dict[str, Any]:
+        """获取缓存状态"""
+        total_size = sum(info["size"] for info in self.step_cache.values())
+        return {
+            "total_steps": len(self.step_cache),
+            "total_size": total_size,
+            "cache_dir": self.cache_dir,
+            "steps": list(self.step_cache.values())
+        }
+```
+
+### 4.3 中断处理模块
+```python
+# interrupt_handler.py
+class InterruptHandler:
+    def __init__(self):
+        self.interrupt_signals = {}
+    
+    async def handle_interrupt(self, step_id: int, interrupt_type: str, save_progress: bool = True):
+        """处理中断信号"""
+        if interrupt_type == "pause":
+            await self._handle_pause(step_id)
+        elif interrupt_type == "stop":
+            await self._handle_stop(step_id, save_progress)
+        elif interrupt_type == "skip":
+            await self._handle_skip(step_id)
+    
+    async def _handle_pause(self, step_id: int):
+        """处理暂停"""
+        # 通知步骤暂停
+        await self._notify_step_pause(step_id)
+        
+        # 保存当前状态
+        await self._save_step_state(step_id, "paused")
+    
+    async def _handle_stop(self, step_id: int, save_progress: bool):
+        """处理停止"""
+        if save_progress:
+            # 保存进度
+            await self._save_step_progress(step_id)
+        
+        # 通知步骤停止
+        await self._notify_step_stop(step_id)
+        
+        # 更新状态
+        await self._save_step_state(step_id, "stopped")
+    
+    async def _handle_skip(self, step_id: int):
+        """处理跳过"""
+        # 通知步骤跳过
+        await self._notify_step_skip(step_id)
+        
+        # 更新状态
+        await self._save_step_state(step_id, "skipped")
+    
+    async def resume_from_interrupt(self, step_id: int) -> bool:
+        """从中断恢复"""
+        current_state = await self._get_step_state(step_id)
+        
+        if current_state in ["paused", "stopped"]:
+            await self._notify_step_resume(step_id)
+            await self._save_step_state(step_id, "running")
+            return True
+        
+        return False
+```
+
+### 4.4 视频处理模块
 ```python
 # video_service.py
 class MediaService:
     def __init__(self):
         self.ffmpeg = FFmpeg()
         self.storage = FileStorage()
+        self.cache_manager = CacheManager()
     
     async def process_media(self, file_path: str) -> MediaInfo:
         """处理媒体文件"""
