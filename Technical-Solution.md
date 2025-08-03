@@ -278,27 +278,36 @@ movie-translate/
 ### 4.1 视频处理模块
 ```python
 # video_service.py
-class VideoService:
+class MediaService:
     def __init__(self):
         self.ffmpeg = FFmpeg()
         self.storage = FileStorage()
     
-    async def process_video(self, video_path: str) -> VideoInfo:
-        """处理视频文件"""
-        # 1. 验证视频格式
-        # 2. 提取元数据
-        # 3. 生成缩略图
-        # 4. 转换格式（如果需要）
-        # 5. 保存到存储
+    async def process_media(self, file_path: str) -> MediaInfo:
+        """处理媒体文件"""
+        # 1. 识别文件类型（视频/音频）
+        # 2. 验证文件格式
+        # 3. 提取元数据
+        # 4. 生成缩略图（仅视频）
+        # 5. 转换格式（如果需要）
+        # 6. 保存到存储
         pass
     
     async def extract_audio(self, video_path: str) -> str:
-        """提取音频"""
+        """提取音频（仅视频文件）"""
         # 使用FFmpeg提取音频
         pass
     
+    async def process_audio(self, audio_path: str) -> AudioInfo:
+        """处理音频文件"""
+        # 1. 验证音频格式
+        # 2. 提取音频元数据
+        # 3. 格式转换（如果需要）
+        # 4. 质量检测
+        pass
+    
     async def generate_thumbnails(self, video_path: str) -> List[str]:
-        """生成缩略图"""
+        """生成缩略图（仅视频文件）"""
         pass
 ```
 
@@ -407,13 +416,16 @@ class VoiceCloningService:
 
 ### 5.1 核心表结构
 ```sql
--- 视频表
-CREATE TABLE videos (
+-- 媒体文件表
+CREATE TABLE media_files (
     id SERIAL PRIMARY KEY,
     filename VARCHAR(255) NOT NULL,
     original_path VARCHAR(500) NOT NULL,
+    file_type VARCHAR(20) NOT NULL, -- 'video' or 'audio'
     duration INTEGER, -- 秒
-    resolution VARCHAR(50),
+    resolution VARCHAR(50), -- 视频分辨率
+    sample_rate INTEGER, -- 音频采样率
+    channels INTEGER, -- 音频声道数
     file_size BIGINT,
     format VARCHAR(10),
     status VARCHAR(20) DEFAULT 'pending',
@@ -421,10 +433,10 @@ CREATE TABLE videos (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 音频表
+-- 音频轨道表（仅视频文件使用）
 CREATE TABLE audio_tracks (
     id SERIAL PRIMARY KEY,
-    video_id INTEGER REFERENCES videos(id),
+    media_id INTEGER REFERENCES media_files(id),
     file_path VARCHAR(500) NOT NULL,
     duration INTEGER,
     sample_rate INTEGER,
@@ -436,7 +448,7 @@ CREATE TABLE audio_tracks (
 -- 字幕表
 CREATE TABLE subtitles (
     id SERIAL PRIMARY KEY,
-    video_id INTEGER REFERENCES videos(id),
+    media_id INTEGER REFERENCES media_files(id),
     language VARCHAR(10) NOT NULL,
     content TEXT NOT NULL, -- SRT格式
     source_type VARCHAR(20), -- 'original' or 'translated'
@@ -447,7 +459,7 @@ CREATE TABLE subtitles (
 -- 角色表
 CREATE TABLE characters (
     id SERIAL PRIMARY KEY,
-    video_id INTEGER REFERENCES videos(id),
+    media_id INTEGER REFERENCES media_files(id),
     name VARCHAR(100),
     gender VARCHAR(10),
     character_type VARCHAR(20),
@@ -474,7 +486,7 @@ CREATE TABLE character_dialogues (
 CREATE TABLE tasks (
     id SERIAL PRIMARY KEY,
     task_type VARCHAR(50) NOT NULL,
-    video_id INTEGER REFERENCES videos(id),
+    media_id INTEGER REFERENCES media_files(id),
     status VARCHAR(20) DEFAULT 'pending',
     progress INTEGER DEFAULT 0,
     error_message TEXT,
@@ -505,13 +517,14 @@ CREATE TABLE system_config (
 ### 5.2 索引设计
 ```sql
 -- 性能优化索引
-CREATE INDEX idx_videos_status ON videos(status);
-CREATE INDEX idx_videos_created_at ON videos(created_at);
-CREATE INDEX idx_subtitles_video_language ON subtitles(video_id, language);
-CREATE INDEX idx_characters_video ON characters(video_id);
+CREATE INDEX idx_media_files_status ON media_files(status);
+CREATE INDEX idx_media_files_created_at ON media_files(created_at);
+CREATE INDEX idx_media_files_type ON media_files(file_type);
+CREATE INDEX idx_subtitles_media_language ON subtitles(media_id, language);
+CREATE INDEX idx_characters_media ON characters(media_id);
 CREATE INDEX idx_character_dialogues_character ON character_dialogues(character_id);
 CREATE INDEX idx_tasks_status ON tasks(status);
-CREATE INDEX idx_tasks_video ON tasks(video_id);
+CREATE INDEX idx_tasks_media ON tasks(media_id);
 CREATE INDEX idx_cache_key_expires ON cache(cache_key, expires_at);
 ```
 
@@ -520,22 +533,22 @@ CREATE INDEX idx_cache_key_expires ON cache(cache_key, expires_at);
 ### 6.1 RESTful API结构
 ```python
 # 主要API端点
-POST   /api/v1/videos/upload              # 上传视频
-GET    /api/v1/videos/{id}                # 获取视频信息
-GET    /api/v1/videos                     # 获取视频列表
-DELETE /api/v1/videos/{id}                # 删除视频
+POST   /api/v1/media/upload               # 上传媒体文件
+GET    /api/v1/media/{id}                 # 获取媒体文件信息
+GET    /api/v1/media                      # 获取媒体文件列表
+DELETE /api/v1/media/{id}                # 删除媒体文件
 
-POST   /api/v1/videos/{id}/process        # 开始处理
-GET    /api/v1/videos/{id}/status         # 获取处理状态
-POST   /api/v1/videos/{id}/pause          # 暂停处理
-POST   /api/v1/videos/{id}/resume         # 恢复处理
-POST   /api/v1/videos/{id}/cancel         # 取消处理
+POST   /api/v1/media/{id}/process        # 开始处理
+GET    /api/v1/media/{id}/status         # 获取处理状态
+POST   /api/v1/media/{id}/pause          # 暂停处理
+POST   /api/v1/media/{id}/resume         # 恢复处理
+POST   /api/v1/media/{id}/cancel         # 取消处理
 
-GET    /api/v1/videos/{id}/audio          # 获取音频信息
-GET    /api/v1/videos/{id}/subtitles      # 获取字幕
-POST   /api/v1/videos/{id}/subtitles      # 上传字幕
+GET    /api/v1/media/{id}/audio          # 获取音频信息
+GET    /api/v1/media/{id}/subtitles      # 获取字幕
+POST   /api/v1/media/{id}/subtitles      # 上传字幕
 
-GET    /api/v1/videos/{id}/characters     # 获取角色列表
+GET    /api/v1/media/{id}/characters     # 获取角色列表
 GET    /api/v1/characters/{id}            # 获取角色详情
 POST   /api/v1/characters/{id}/clone      # 克隆声音
 POST   /api/v1/characters/{id}/synthesize # 语音合成
@@ -729,9 +742,10 @@ services:
 
 ### 8.3 异步处理
 - **消息队列**：使用Celery处理耗时任务
-- **异步IO**：使用async/await提高并发性能
+- **异步IO**：使用async/await提高性能
 - **批处理**：批量处理减少IO开销
 - **流式处理**：大文件流式处理
+- **串行处理**：一次只处理一个文件，确保系统稳定性
 
 ### 8.4 资源优化
 - **内存管理**：及时释放不再使用的资源
@@ -763,7 +777,7 @@ services:
 
 ### 10.1 监控指标
 - **系统指标**：CPU、内存、磁盘、网络
-- **应用指标**：API响应时间、错误率、并发数
+- **应用指标**：API响应时间、错误率、处理队列长度
 - **业务指标**：处理任务数、成功率、平均处理时间
 - **自定义指标**：模型准确率、资源使用率
 
