@@ -230,9 +230,18 @@ movie-translate/
 │   │   ├── glm/                # GLM模型
 │   │   └── google/             # Google翻译
 │   ├── voice_cloning/          # 声音克隆
-│   │   ├── models/             # 声音克隆模型
-│   │   ├── training/           # 模型训练
-│   │   └── synthesis/          # 语音合成
+│   │   ├── f5_tts/             # F5-TTS本地模型
+│   │   │   ├── models/         # F5-TTS模型文件
+│   │   │   ├── training/       # 模型训练脚本
+│   │   │   ├── synthesis/      # 语音合成
+│   │   │   └── optimization/    # 性能优化
+│   │   ├── minimax/            # MiniMax Audio API
+│   │   │   ├── api/            # API接口封装
+│   │   │   ├── fallback/       # 容错机制
+│   │   │   └── quality/         # 质量评估
+│   │   ├── routing/            # 智能路由
+│   │   ├── quality/             # 质量评估
+│   │   └── cache/              # 缓存管理
 │   └── character_analysis/     # 角色分析
 │       ├── gender_detection/   # 性别检测
 │       ├── voice_feature/      # 音色特征
@@ -311,7 +320,7 @@ movie-translate/
 | **语音识别** | SenseVoice (阿里) | 中文优化，本地部署，5090显卡加速 |
 | **翻译模型** | DeepSeek R1 | 高质量翻译，支持上下文 |
 | **备选方案** | GLM-4.5 | 中文优化，专业术语 |
-| **声音克隆** | XTTS, VITS | 开源声音克隆模型 |
+| **声音克隆** | F5-TTS (本地) / MiniMax Audio (云端) | F5-TTS本地部署高质量声音克隆，MiniMax Audio云端API备用方案 |
 | **角色识别** | PyAnnote, VoiceID | 说话人识别和聚类 |
 | **音频处理** | librosa, pydub | 音频分析和处理 |
 | **深度学习框架** | PyTorch | 灵活的深度学习框架 |
@@ -825,32 +834,710 @@ CREATE TABLE translation_tasks (
 # voice_cloning_service.py
 class VoiceCloningService:
     def __init__(self):
-        self.models = {
-            'xtts': XTTSModel(),
-            'vits': VITSModel()
+        self.local_models = {
+            'f5_tts': F5TTSModel(),      # 本地F5-TTS模型
         }
-        self.trainer = ModelTrainer()
+        self.cloud_services = {
+            'minimax': MiniMaxAudioService()  # MiniMax Audio API
+        }
+        self.voice_processor = VoiceProcessor()
+        self.quality_analyzer = VoiceQualityAnalyzer()
+        self.cache_manager = VoiceCacheManager()
     
-    async def clone_voice(self, character_id: str, audio_samples: List[str]) -> str:
-        """克隆声音"""
-        # 1. 数据预处理
-        # 2. 模型训练
-        # 3. 质量评估
-        # 4. 保存模型
-        pass
+    async def clone_voice(self, character_id: str, audio_samples: List[str]) -> VoiceCloneResult:
+        """克隆声音 - 本地F5-TTS方案"""
+        try:
+            # 1. 音频预处理
+            processed_audio = await self.voice_processor.preprocess_audio(audio_samples)
+            
+            # 2. 音质评估
+            quality_result = await self.quality_analyzer.analyze_audio_quality(processed_audio)
+            if not quality_result.is_suitable:
+                raise VoiceQualityError(f"音频质量不达标: {quality_result.reason}")
+            
+            # 3. 检查本地缓存
+            cache_key = self._generate_voice_cache_key(character_id, processed_audio)
+            cached_model = await self.cache_manager.get_cached_model(cache_key)
+            if cached_model:
+                return VoiceCloneResult(
+                    character_id=character_id,
+                    model_path=cached_model,
+                    quality_score=quality_result.score,
+                    is_cached=True
+                )
+            
+            # 4. 使用F5-TTS训练声音模型
+            model_path = await self._train_f5_tts_model(character_id, processed_audio)
+            
+            # 5. 质量验证
+            validation_result = await self._validate_voice_model(model_path, character_id)
+            
+            # 6. 缓存模型
+            await self.cache_manager.save_model_cache(cache_key, model_path)
+            
+            return VoiceCloneResult(
+                character_id=character_id,
+                model_path=model_path,
+                quality_score=validation_result.score,
+                training_time=validation_result.training_time
+            )
+            
+        except Exception as e:
+            # 本地训练失败，尝试云端方案
+            return await self._fallback_to_cloud_service(character_id, audio_samples)
     
-    async def synthesize(self, text: str, character_id: str) -> str:
-        """语音合成"""
-        # 1. 加载模型
-        # 2. 文本预处理
-        # 3. 语音合成
-        # 4. 后处理
-        pass
+    async def synthesize(self, text: str, character_id: str, use_cloud: bool = False) -> str:
+        """语音合成 - 本地/云端混合方案"""
+        if use_cloud:
+            # 使用MiniMax Audio API
+            return await self._synthesize_with_cloud(text, character_id)
+        else:
+            # 使用本地F5-TTS模型
+            return await self._synthesize_with_local(text, character_id)
+    
+    async def _train_f5_tts_model(self, character_id: str, audio_samples: List[str]) -> str:
+        """使用F5-TTS训练声音模型"""
+        try:
+            # 1. 准备训练数据
+            training_data = await self._prepare_training_data(audio_samples)
+            
+            # 2. 配置F5-TTS训练参数
+            config = F5TTSConfig(
+                speaker_id=character_id,
+                training_steps=1000,    # 适配快速训练
+                learning_rate=1e-4,
+                batch_size=4,
+                save_dir=f"models/voice_clones/{character_id}"
+            )
+            
+            # 3. 执行训练
+            f5_model = self.local_models['f5_tts']
+            model_path = await f5_model.train(
+                training_data=training_data,
+                config=config
+            )
+            
+            return model_path
+            
+        except Exception as e:
+            logger.error(f"F5-TTS训练失败: {e}")
+            raise VoiceCloningError(f"声音模型训练失败: {e}")
+    
+    async def _synthesize_with_local(self, text: str, character_id: str) -> str:
+        """使用本地F5-TTS合成语音"""
+        try:
+            # 1. 加载角色模型
+            model_path = f"models/voice_clones/{character_id}/model.pt"
+            if not os.path.exists(model_path):
+                raise ModelNotFoundError(f"未找到角色声音模型: {character_id}")
+            
+            # 2. 文本预处理
+            processed_text = await self.voice_processor.preprocess_text(text)
+            
+            # 3. F5-TTS语音合成
+            f5_model = self.local_models['f5_tts']
+            audio_path = await f5_model.synthesize(
+                text=processed_text,
+                speaker_id=character_id,
+                model_path=model_path
+            )
+            
+            # 4. 音频后处理
+            final_audio = await self.voice_processor.postprocess_audio(audio_path)
+            
+            return final_audio
+            
+        except Exception as e:
+            logger.error(f"本地语音合成失败: {e}")
+            # 降级到云端方案
+            return await self._synthesize_with_cloud(text, character_id)
+    
+    async def _synthesize_with_cloud(self, text: str, character_id: str) -> str:
+        """使用MiniMax Audio API合成语音"""
+        try:
+            # 1. 获取角色声音特征
+            voice_features = await self._get_character_voice_features(character_id)
+            
+            # 2. 调用MiniMax Audio API
+            minimax_service = self.cloud_services['minimax']
+            audio_path = await minimax_service.tts(
+                text=text,
+                voice_id=voice_features.voice_id,
+                voice_prompt=voice_features.prompt_text,
+                speed=1.0,
+                volume=0.8
+            )
+            
+            return audio_path
+            
+        except Exception as e:
+            logger.error(f"云端语音合成失败: {e}")
+            raise VoiceSynthesisError(f"语音合成失败: {e}")
+    
+    async def _fallback_to_cloud_service(self, character_id: str, audio_samples: List[str]) -> VoiceCloneResult:
+        """降级到云端声音克隆服务"""
+        try:
+            # 使用MiniMax Audio的声音复刻功能
+            minimax_service = self.cloud_services['minimax']
+            voice_clone_result = await minimax_service.voice_clone(
+                audio_samples=audio_samples,
+                character_name=character_id
+            )
+            
+            return VoiceCloneResult(
+                character_id=character_id,
+                model_path=None,  # 云端模型，无本地路径
+                voice_id=voice_clone_result.voice_id,
+                quality_score=voice_clone_result.quality_score,
+                is_cloud_based=True
+            )
+            
+        except Exception as e:
+            logger.error(f"云端声音克隆也失败: {e}")
+            raise VoiceCloningError(f"声音克隆失败，请检查音频质量或重试: {e}")
 ```
 
-## 5. 数据库设计
+## 5. 声音克隆技术方案详解
 
-### 5.1 核心表结构 (SQLite)
+### 5.1 F5-TTS本地部署方案
+
+#### 5.1.1 F5-TTS技术特点
+- **零样本声音克隆**：仅需少量音频样本即可高质量克隆声音
+- **多语言支持**：支持中文、英文等多种语言的语音合成
+- **情感表达**：能够保留原声音的情感特征和语调
+- **高质量输出**：生成自然流畅的语音，接近真人水平
+- **GPU加速**：支持CUDA加速，充分利用5090显卡性能
+
+#### 5.1.2 F5-TTS本地部署架构
+```python
+# f5_tts_service.py
+class F5TTSModel:
+    def __init__(self):
+        self.model_path = "models/f5_tts"
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model = None
+        self.is_loaded = False
+    
+    async def load_model(self):
+        """加载F5-TTS模型"""
+        if not self.is_loaded:
+            try:
+                # 从Hugging Face加载模型
+                self.model = F5TTSForConditionalGeneration.from_pretrained(
+                    "SWivid/F5-TTS"
+                ).to(self.device)
+                
+                # 加载语音编码器
+                self.speaker_encoder = SpeakerEncoder.from_pretrained(
+                    "SWivid/F5-TTS-Speaker-Encoder"
+                ).to(self.device)
+                
+                self.is_loaded = True
+                logger.info("F5-TTS模型加载成功")
+                
+            except Exception as e:
+                logger.error(f"F5-TTS模型加载失败: {e}")
+                raise ModelLoadError(f"F5-TTS模型加载失败: {e}")
+    
+    async def train(self, training_data: List[AudioSample], config: F5TTSConfig) -> str:
+        """快速训练声音模型"""
+        await self.load_model()
+        
+        try:
+            # 1. 音频特征提取
+            speaker_embeddings = []
+            for sample in training_data:
+                embedding = await self._extract_speaker_embedding(sample.audio_path)
+                speaker_embeddings.append(embedding)
+            
+            # 2. 计算平均说话人嵌入
+            avg_embedding = torch.mean(torch.stack(speaker_embeddings), dim=0)
+            
+            # 3. 快速适配训练
+            optimizer = torch.optim.AdamW(self.model.parameters(), lr=config.learning_rate)
+            
+            for step in range(config.training_steps):
+                # 使用少量数据进行快速适配
+                loss = await self._training_step(training_data, avg_embedding)
+                optimizer.step()
+                
+                if step % 100 == 0:
+                    logger.info(f"训练进度: {step}/{config.training_steps}, Loss: {loss:.4f}")
+            
+            # 4. 保存适配后的模型
+            model_save_path = os.path.join(config.save_dir, "adapter_model.pt")
+            torch.save({
+                'model_state_dict': self.model.state_dict(),
+                'speaker_embedding': avg_embedding,
+                'config': config.__dict__
+            }, model_save_path)
+            
+            return model_save_path
+            
+        except Exception as e:
+            logger.error(f"F5-TTS训练失败: {e}")
+            raise TrainingError(f"训练失败: {e}")
+    
+    async def synthesize(self, text: str, speaker_id: str, model_path: str) -> str:
+        """语音合成"""
+        await self.load_model()
+        
+        try:
+            # 1. 加载说话人特定模型
+            checkpoint = torch.load(model_path, map_location=self.device)
+            speaker_embedding = checkpoint['speaker_embedding']
+            
+            # 2. 文本预处理
+            input_ids = self._tokenize_text(text)
+            
+            # 3. 生成语音
+            with torch.no_grad():
+                # 生成梅尔频谱图
+                mel_spectrogram = self.model.generate(
+                    input_ids=input_ids,
+                    speaker_embedding=speaker_embedding,
+                    temperature=0.7,
+                    top_p=0.9
+                )
+                
+                # 转换为音频波形
+                audio_waveform = self._mel_to_audio(mel_spectrogram)
+            
+            # 4. 保存音频
+            output_path = f"temp/audio/{speaker_id}_{int(time.time())}.wav"
+            self._save_audio(audio_waveform, output_path)
+            
+            return output_path
+            
+        except Exception as e:
+            logger.error(f"F5-TTS合成失败: {e}")
+            raise SynthesisError(f"语音合成失败: {e}")
+```
+
+#### 5.1.3 F5-TTS性能优化策略
+```python
+# f5_tts_optimizer.py
+class F5TTSOptimizer:
+    def __init__(self):
+        self.model_config = F5TTSConfig()
+        self.gpu_manager = GPUMemoryManager()
+    
+    async def optimize_for_gpu(self):
+        """GPU性能优化"""
+        # 1. 启用半精度训练
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        
+        # 2. 显存优化
+        if torch.cuda.is_available():
+            # 启用梯度检查点
+            self.model.gradient_checkpointing_enable()
+            
+            # 使用内存高效注意力
+            self.model.config.use_memory_efficient_attention = True
+            
+            # 显存分配策略
+            self.gpu_manager.set_memory_allocation_strategy('dynamic')
+    
+    async def batch_synthesis(self, texts: List[str], speaker_id: str) -> List[str]:
+        """批量语音合成"""
+        # 1. 文本分组
+        text_batches = self._group_texts_by_length(texts, batch_size=8)
+        
+        # 2. 并行处理
+        tasks = []
+        for batch in text_batches:
+            task = self._synthesize_batch(batch, speaker_id)
+            tasks.append(task)
+        
+        # 3. 执行批量合成
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        return self._process_results(results)
+    
+    async def cache_management(self):
+        """缓存管理"""
+        # 1. 模型缓存
+        self.model_cache = LRUCache(maxsize=5)
+        
+        # 2. 说话人嵌入缓存
+        self.embedding_cache = TTLCache(maxsize=100, ttl=3600)
+        
+        # 3. 音频结果缓存
+        self.audio_cache = DiskCache(cache_dir="cache/audio")
+```
+
+### 5.2 MiniMax Audio云端方案
+
+#### 5.2.1 MiniMax Audio技术特点
+- **高质量声音克隆**：支持1:1声音复刻，质量优秀
+- **快速处理**：云端API响应快速，无需本地计算资源
+- **稳定可靠**：企业级服务，稳定性高
+- **多场景适用**：支持多种应用场景的声音合成
+- **简单易用**：API接口简单，集成方便
+
+#### 5.2.2 MiniMax Audio API集成
+```python
+# minimax_audio_service.py
+class MiniMaxAudioService:
+    def __init__(self):
+        self.api_key = os.getenv("MINIMAX_API_KEY")
+        self.base_url = "https://api.minimax.chat/v1"
+        self.http_client = AsyncHTTPClient()
+        self.rate_limiter = RateLimiter(calls_per_minute=60)
+    
+    async def voice_clone(self, audio_samples: List[str], character_name: str) -> VoiceCloneResult:
+        """声音克隆API"""
+        await self.rate_limiter.acquire()
+        
+        try:
+            # 1. 上传音频样本
+            upload_urls = []
+            for sample_path in audio_samples:
+                upload_url = await self._upload_audio_sample(sample_path)
+                upload_urls.append(upload_url)
+            
+            # 2. 创建声音克隆任务
+            clone_request = {
+                "character_name": character_name,
+                "audio_samples": upload_urls,
+                "quality": "high",
+                "language": "zh"
+            }
+            
+            response = await self.http_client.post(
+                f"{self.base_url}/voice_clone",
+                json=clone_request,
+                headers=self._get_headers()
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                return VoiceCloneResult(
+                    character_id=character_name,
+                    voice_id=result["voice_id"],
+                    quality_score=result["quality_score"],
+                    is_cloud_based=True
+                )
+            else:
+                raise APIError(f"声音克隆失败: {response.status_code}")
+                
+        except Exception as e:
+            logger.error(f"MiniMax声音克隆失败: {e}")
+            raise
+    
+    async def tts(self, text: str, voice_id: str, voice_prompt: str = None, 
+                 speed: float = 1.0, volume: float = 0.8) -> str:
+        """文本转语音API"""
+        await self.rate_limiter.acquire()
+        
+        try:
+            tts_request = {
+                "text": text,
+                "voice_id": voice_id,
+                "speed": speed,
+                "volume": volume,
+                "emotion": "natural"
+            }
+            
+            if voice_prompt:
+                tts_request["voice_prompt"] = voice_prompt
+            
+            response = await self.http_client.post(
+                f"{self.base_url}/tts",
+                json=tts_request,
+                headers=self._get_headers()
+            )
+            
+            if response.status_code == 200:
+                # 保存音频文件
+                audio_data = response.content
+                output_path = f"temp/audio/minimax_{int(time.time())}.wav"
+                
+                with open(output_path, 'wb') as f:
+                    f.write(audio_data)
+                
+                return output_path
+            else:
+                raise APIError(f"TTS合成失败: {response.status_code}")
+                
+        except Exception as e:
+            logger.error(f"MiniMax TTS失败: {e}")
+            raise
+    
+    async def _upload_audio_sample(self, audio_path: str) -> str:
+        """上传音频样本"""
+        with open(audio_path, 'rb') as f:
+            files = {'file': f}
+            response = await self.http_client.post(
+                f"{self.base_url}/upload_audio",
+                files=files,
+                headers=self._get_headers()
+            )
+            
+        if response.status_code == 200:
+            result = response.json()
+            return result["url"]
+        else:
+            raise APIError(f"音频上传失败: {response.status_code}")
+```
+
+#### 5.2.3 MiniMax Audio容错和降级策略
+```python
+# minimax_fallback.py
+class MiniMaxFallbackStrategy:
+    def __init__(self):
+        self.retry_policy = RetryPolicy(
+            max_retries=3,
+            backoff_factor=2,
+            retryable_exceptions=[TimeoutError, ConnectionError]
+        )
+        self.circuit_breaker = CircuitBreaker(
+            failure_threshold=5,
+            recovery_timeout=300
+        )
+    
+    async def safe_voice_clone(self, audio_samples: List[str], character_name: str) -> VoiceCloneResult:
+        """安全的声音克隆（带容错）"""
+        try:
+            # 1. 检查熔断器状态
+            if self.circuit_breaker.is_open():
+                raise CircuitBreakerOpenError("MiniMax服务暂时不可用")
+            
+            # 2. 带重试的API调用
+            result = await self.retry_policy.execute(
+                lambda: self.minimax_service.voice_clone(audio_samples, character_name)
+            )
+            
+            # 3. 成功则重置熔断器
+            self.circuit_breaker.on_success()
+            
+            return result
+            
+        except Exception as e:
+            # 4. 失败则记录熔断器
+            self.circuit_breaker.on_failure()
+            raise
+    
+    async def safe_tts(self, text: str, voice_id: str, **kwargs) -> str:
+        """安全的TTS合成（带容错）"""
+        try:
+            if self.circuit_breaker.is_open():
+                raise CircuitBreakerOpenError("MiniMax服务暂时不可用")
+            
+            result = await self.retry_policy.execute(
+                lambda: self.minimax_service.tts(text, voice_id, **kwargs)
+            )
+            
+            self.circuit_breaker.on_success()
+            return result
+            
+        except Exception as e:
+            self.circuit_breaker.on_failure()
+            raise
+```
+
+### 5.3 混合方案策略
+
+#### 5.3.1 智能路由策略
+```python
+# voice_routing.py
+class VoiceRoutingStrategy:
+    def __init__(self):
+        self.local_service = VoiceCloningService()
+        self.cloud_service = MiniMaxAudioService()
+        self.quality_threshold = 0.8
+        self.performance_monitor = PerformanceMonitor()
+    
+    async def route_voice_clone(self, character_id: str, audio_samples: List[str]) -> VoiceCloneResult:
+        """智能路由声音克隆请求"""
+        try:
+            # 1. 评估系统资源
+            system_status = await self.performance_monitor.get_system_status()
+            
+            # 2. 评估音频质量
+            audio_quality = await self._evaluate_audio_quality(audio_samples)
+            
+            # 3. 决策路由
+            if self._should_use_local(system_status, audio_quality):
+                logger.info("使用本地F5-TTS进行声音克隆")
+                return await self.local_service.clone_voice(character_id, audio_samples)
+            else:
+                logger.info("使用云端MiniMax进行声音克隆")
+                return await self.cloud_service.voice_clone(audio_samples, character_id)
+                
+        except Exception as e:
+            logger.error(f"路由决策失败: {e}")
+            # 默认使用云端方案
+            return await self.cloud_service.voice_clone(audio_samples, character_id)
+    
+    def _should_use_local(self, system_status: SystemStatus, audio_quality: AudioQuality) -> bool:
+        """决定是否使用本地方案"""
+        # 1. 检查GPU可用性
+        if not system_status.gpu_available:
+            return False
+        
+        # 2. 检查显存
+        if system_status.gpu_memory_mb < 8000:  # 至少8GB显存
+            return False
+        
+        # 3. 检查音频质量
+        if audio_quality.score < self.quality_threshold:
+            return False
+        
+        # 4. 检查系统负载
+        if system_status.cpu_usage > 80:
+            return False
+        
+        return True
+```
+
+#### 5.3.2 质量评估和对比
+```python
+# quality_comparison.py
+class VoiceQualityComparator:
+    def __init__(self):
+        self.evaluator = VoiceQualityEvaluator()
+    
+    async def compare_voice_quality(self, original_audio: str, 
+                                   local_result: str, cloud_result: str) -> QualityReport:
+        """对比本地和云端声音质量"""
+        try:
+            # 1. 评估本地结果
+            local_quality = await self.evaluator.evaluate(
+                reference_audio=original_audio,
+                synthesized_audio=local_result,
+                metrics=["mos", "similarity", "articulation"]
+            )
+            
+            # 2. 评估云端结果
+            cloud_quality = await self.evaluator.evaluate(
+                reference_audio=original_audio,
+                synthesized_audio=cloud_result,
+                metrics=["mos", "similarity", "articulation"]
+            )
+            
+            # 3. 生成对比报告
+            report = QualityReport(
+                local_score=local_quality.overall_score,
+                cloud_score=cloud_quality.overall_score,
+                local_metrics=local_quality.detailed_metrics,
+                cloud_metrics=cloud_quality.detailed_metrics,
+                recommendation=self._make_recommendation(local_quality, cloud_quality)
+            )
+            
+            return report
+            
+        except Exception as e:
+            logger.error(f"质量对比失败: {e}")
+            raise
+    
+    def _make_recommendation(self, local: QualityMetrics, cloud: QualityMetrics) -> str:
+        """给出使用建议"""
+        if local.overall_score >= cloud.overall_score:
+            return "建议使用本地F5-TTS方案"
+        else:
+            return "建议使用云端MiniMax方案"
+```
+
+### 5.4 声音克隆数据模型
+
+#### 5.4.1 数据结构定义
+```python
+# voice_models.py
+class VoiceCloneResult(BaseModel):
+    character_id: str
+    model_path: Optional[str] = None  # 本地模型路径
+    voice_id: Optional[str] = None    # 云端声音ID
+    quality_score: float
+    training_time: Optional[float] = None
+    is_cached: bool = False
+    is_cloud_based: bool = False
+    created_at: datetime = datetime.now()
+
+class AudioQuality(BaseModel):
+    score: float
+    is_suitable: bool
+    reason: Optional[str] = None
+    details: Dict[str, Any] = {}
+
+class F5TTSConfig(BaseModel):
+    speaker_id: str
+    training_steps: int = 1000
+    learning_rate: float = 1e-4
+    batch_size: int = 4
+    save_dir: str
+    temperature: float = 0.7
+    top_p: float = 0.9
+    audio_sample_rate: int = 22050
+    audio_duration: int = 10  # 单个样本最大时长
+
+class QualityReport(BaseModel):
+    local_score: float
+    cloud_score: float
+    local_metrics: Dict[str, float]
+    cloud_metrics: Dict[str, float]
+    recommendation: str
+    created_at: datetime = datetime.now()
+```
+
+### 5.5 声音克隆性能优化
+
+#### 5.5.1 GPU显存优化
+```python
+# gpu_optimization.py
+class GPUMemoryManager:
+    def __init__(self):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.allocated_memory = 0
+        self.memory_threshold = 0.8  # 使用阈值
+    
+    async def optimize_memory_usage(self):
+        """优化显存使用"""
+        if torch.cuda.is_available():
+            # 1. 清空缓存
+            torch.cuda.empty_cache()
+            
+            # 2. 设置内存分配策略
+            torch.cuda.set_per_process_memory_fraction(0.8)
+            
+            # 3. 启用内存池
+            if hasattr(torch.cuda, 'memory_pool'):
+                torch.cuda.memory_pool.empty_cache()
+    
+    async def manage_model_loading(self, model_name: str):
+        """管理模型加载"""
+        # 1. 检查当前显存使用
+        current_memory = torch.cuda.memory_allocated() / 1024**3  # GB
+        total_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        
+        # 2. 如果显存不足，卸载其他模型
+        if current_memory / total_memory > self.memory_threshold:
+            await self._unload_unused_models()
+        
+        # 3. 加载模型
+        await self._load_model_with_memory_check(model_name)
+    
+    async def batch_processing_optimization(self, batch_size: int) -> int:
+        """批量处理优化"""
+        if not torch.cuda.is_available():
+            return batch_size
+        
+        # 根据显存动态调整批次大小
+        available_memory = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()
+        estimated_batch_memory = batch_size * 100 * 1024**2  # 估计每个批次需要100MB
+        
+        if available_memory < estimated_batch_memory:
+            optimized_batch_size = max(1, batch_size // 2)
+            logger.info(f"调整批次大小: {batch_size} -> {optimized_batch_size}")
+            return optimized_batch_size
+        
+        return batch_size
+```
+
+## 6. 数据库设计
+
+### 6.1 核心表结构 (SQLite)
 ```sql
 -- 媒体文件表
 CREATE TABLE media_files (
@@ -902,7 +1589,11 @@ CREATE TABLE characters (
     total_duration INTEGER, -- 秒
     appearance_count INTEGER DEFAULT 0,
     voice_features TEXT, -- JSON格式存储音色特征
-    model_path VARCHAR(500), -- 声音克隆模型路径
+    model_path VARCHAR(500), -- 本地声音克隆模型路径
+    cloud_voice_id VARCHAR(100), -- 云端声音ID
+    clone_quality_score REAL, -- 声音克隆质量评分
+    clone_method VARCHAR(20), -- 克隆方法: 'f5_tts', 'minimax'
+    is_cloud_based BOOLEAN DEFAULT FALSE, -- 是否使用云端模型
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -915,6 +1606,68 @@ CREATE TABLE character_dialogues (
     end_time REAL NOT NULL,
     confidence REAL,
     audio_segment_path VARCHAR(500),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 声音克隆任务表
+CREATE TABLE voice_clone_tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    character_id INTEGER REFERENCES characters(id),
+    task_id VARCHAR(64) UNIQUE NOT NULL,
+    status VARCHAR(20) DEFAULT 'pending', -- pending, processing, completed, failed
+    clone_method VARCHAR(20), -- f5_tts, minimax
+    audio_samples TEXT, -- JSON格式存储音频样本路径
+    model_path VARCHAR(500), -- 本地模型路径
+    cloud_voice_id VARCHAR(100), -- 云端声音ID
+    quality_score REAL,
+    error_message TEXT,
+    training_time REAL, -- 训练时长（秒）
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP
+);
+
+-- 声音合成任务表
+CREATE TABLE voice_synthesis_tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    character_id INTEGER REFERENCES characters(id),
+    subtitle_id INTEGER REFERENCES subtitles(id),
+    task_id VARCHAR(64) UNIQUE NOT NULL,
+    status VARCHAR(20) DEFAULT 'pending',
+    synthesis_method VARCHAR(20), -- local, cloud
+    text TEXT NOT NULL,
+    output_path VARCHAR(500),
+    duration REAL, -- 音频时长
+    quality_score REAL,
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP
+);
+
+-- 声音克隆缓存表
+CREATE TABLE voice_clone_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    character_id INTEGER REFERENCES characters(id),
+    cache_key VARCHAR(255) UNIQUE NOT NULL,
+    model_path VARCHAR(500),
+    cloud_voice_id VARCHAR(100),
+    quality_score REAL,
+    access_count INTEGER DEFAULT 0,
+    last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP
+);
+
+-- 声音质量评估表
+CREATE TABLE voice_quality_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    character_id INTEGER REFERENCES characters(id),
+    task_type VARCHAR(20), -- clone, synthesis
+    method VARCHAR(20), -- f5_tts, minimax
+    original_audio_path VARCHAR(500),
+    synthesized_audio_path VARCHAR(500),
+    metrics TEXT, -- JSON格式存储质量指标
+    overall_score REAL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
