@@ -2,28 +2,29 @@
 
 ## 1. 系统架构设计
 
-### 1.1 整体架构
+### 1.1 整体架构 - Python全栈桌面应用
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        前端层 (Frontend)                         │
+│                        桌面应用层 (Desktop App)                   │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │  React/Next.js Web应用                                  │   │
-│  │  • 用户界面组件                                        │   │
+│  │  Python桌面应用 (CustomTkinter/PySide6)               │   │
+│  │  • 主界面组件                                        │   │
 │  │  • 文件拖拽上传                                        │   │
 │  │  • 实时进度显示                                        │   │
 │  │  • 角色管理界面                                        │   │
+│  │  • 设置管理界面                                        │   │
 │  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                        API网关层 (Gateway)                       │
+│                        本地服务层 (Local Service)                 │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │  FastAPI + WebSocket                                    │   │
-│  │  • RESTful API                                         │   │
+│  │  FastAPI本地服务器                                      │   │
+│  │  • RESTful API (本地通信)                              │   │
 │  │  • WebSocket实时通信                                    │   │
-│  │  • 请求路由和负载均衡                                   │   │
-│  │  • 认证和授权                                           │   │
+│  │  • 任务队列管理                                        │   │
+│  │  • 进度状态同步                                        │   │
 │  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
                                 │
@@ -42,13 +43,13 @@
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                        数据存储层 (Storage)                      │
+│                        数据存储层 (Local Storage)                │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │  数据存储                                               │   │
-│  │  • PostgreSQL (关系数据)                               │   │
-│  │  • Redis (缓存)                                       │   │
-│  │  • MinIO (文件存储)                                   │   │
-│  │  • SQLite (本地配置)                                   │   │
+│  │  本地存储                                               │   │
+│  │  • SQLite (关系数据)                                   │   │
+│  │  • 文件系统缓存                                        │   │
+│  │  • 本地模型存储                                        │   │
+│  │  • 配置文件管理                                        │   │
 │  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
                                 │
@@ -64,25 +65,37 @@
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 1.2 微服务架构
+### 1.2 本地服务架构
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        API Gateway                             │
+│                    桌面应用主进程                              │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │  Gateway Service                                      │   │
+│  │  Main Application (CustomTkinter/PySide6)               │   │
+│  │  • UI事件处理                                          │   │
+│  │  • 本地API调用                                         │   │
+│  │  • 实时状态更新                                        │   │
+│  │  • 文件操作管理                                        │   │
+│  └─────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    本地FastAPI服务                            │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  Local FastAPI Server                                  │   │
 │  │  • 路由: /api/v1/*                                   │   │
-│  │  • 认证: JWT                                         │   │
-│  │  • 限流: Redis                                       │   │
-│  │  • 监控: Prometheus                                  │   │
+│  │  • 本地任务队列                                       │   │
+│  │  • 文件系统管理                                       │   │
+│  │  • 进度状态同步                                       │   │
 │  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
                                 │
                     ┌───────────┼───────────┐
                     ▼           ▼           ▼
 ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
-│  Video Service  │ │  Audio Service  │ │  Translation    │
+│  Media Service  │ │  Audio Service  │ │  Translation    │
 │                 │ │                 │ │  Service        │
-│ • 视频上传      │ │ • 音频提取      │ │ • 文本翻译      │
+│ • 视频处理      │ │ • 音频提取      │ │ • 文本翻译      │
 │ • 格式转换      │ │ • 音频处理      │ │ • 多语言支持    │
 │ • 元数据提取    │ │ • 质量检测      │ │ • 术语库管理    │
 └─────────────────┘ └─────────────────┘ └─────────────────┘
@@ -91,7 +104,7 @@
 ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
 │  Character      │ │  Voice Clone    │ │  Cache Service  │
 │  Service        │ │  Service        │ │                 │
-│ • 角色识别      │ │ • 音色建模      │ │ • 结果缓存      │
+│ • 角色识别      │ │ • 音色建模      │ │ • 本地文件缓存  │
 │ • 性别识别      │ │ • 语音合成      │ │ • 断点续传      │
 │ • 特征提取      │ │ • 质量优化      │ │ • 数据清理      │
 └─────────────────┘ └─────────────────┘ └─────────────────┘
@@ -99,88 +112,114 @@
 
 ## 2. 项目结构
 
-### 2.1 目录结构
+### 2.1 目录结构 - Python桌面应用
 ```
 movie-translate/
-├── frontend/                    # 前端应用
-│   ├── src/
-│   │   ├── components/         # 通用组件
-│   │   │   ├── ui/             # 基础UI组件
-│   │   │   ├── video/          # 视频相关组件
-│   │   │   ├── character/      # 角色管理组件
-│   │   │   ├── steps/          # 步骤导航组件
-│   │   │   │   ├── StepNavigator/    # 步骤导航器
-│   │   │   │   ├── StepDetails/      # 步骤详情面板
-│   │   │   │   ├── StepStatus/       # 步骤状态显示
-│   │   │   │   └── StepControls/     # 步骤控制按钮
-│   │   │   ├── cache/          # 缓存管理组件
-│   │   │   │   ├── CacheManager/     # 缓存管理器
-│   │   │   │   ├── CacheStatus/      # 缓存状态显示
-│   │   │   │   └── CacheControls/    # 缓存控制按钮
-│   │   │   └── common/         # 通用组件
-│   │   ├── pages/              # 页面组件
-│   │   │   ├── home/           # 首页
-│   │   │   │   ├── components/      # 首页组件
-│   │   │   │   ├── hooks/            # 首页Hooks
-│   │   │   │   └── styles/           # 首页样式
-│   │   │   ├── video/          # 视频处理页
-│   │   │   ├── characters/      # 角色管理页
-│   │   │   ├── settings/       # 设置页
-│   │   │   └── history/        # 历史记录页
-│   │   ├── hooks/              # 自定义Hooks
-│   │   │   ├── useStepManager/  # 步骤管理Hook
-│   │   │   ├── useCacheManager/ # 缓存管理Hook
-│   │   │   ├── useProcessState/ # 处理状态Hook
-│   │   │   └── useInterruptHandler/ # 中断处理Hook
-│   │   ├── services/           # API服务
-│   │   ├── utils/              # 工具函数
-│   │   ├── store/              # 状态管理
-│   │   │   ├── steps/          # 步骤状态
-│   │   │   ├── cache/          # 缓存状态
-│   │   │   ├── process/        # 处理状态
-│   │   │   └── ui/             # UI状态
-│   │   └── types/              # TypeScript类型定义
-│   ├── public/                 # 静态资源
-│   ├── package.json
-│   └── next.config.js
+├── app/                        # 桌面应用主程序
+│   ├── __init__.py
+│   ├── main.py                 # 应用入口
+│   ├── ui/                     # UI界面
+│   │   ├── __init__.py
+│   │   ├── main_window.py      # 主窗口
+│   │   ├── components/         # UI组件
+│   │   │   ├── __init__.py
+│   │   │   ├── file_upload.py    # 文件上传组件
+│   │   │   ├── progress_panel.py # 进度面板
+│   │   │   ├── step_navigator.py # 步骤导航器
+│   │   │   ├── character_manager.py # 角色管理器
+│   │   │   ├── settings_panel.py # 设置面板
+│   │   │   └── cache_manager.py # 缓存管理器
+│   │   ├── dialogs/           # 对话框
+│   │   │   ├── __init__.py
+│   │   │   ├── error_dialog.py    # 错误对话框
+│   │   │   ├── progress_dialog.py # 进度对话框
+│   │   │   └── settings_dialog.py # 设置对话框
+│   │   ├── styles/            # 样式配置
+│   │   │   ├── __init__.py
+│   │   │   ├── themes.py         # 主题配置
+│   │   │   └── fonts.py          # 字体配置
+│   │   └── utils/             # UI工具
+│   │       ├── __init__.py
+│   │       ├── file_dialog.py    # 文件对话框
+│   │       └── message_box.py    # 消息框
+│   ├── services/               # 本地API客户端
+│   │   ├── __init__.py
+│   │   ├── api_client.py       # API客户端
+│   │   ├── websocket_client.py # WebSocket客户端
+│   │   └── event_handler.py    # 事件处理器
+│   ├── models/                 # 数据模型
+│   │   ├── __init__.py
+│   │   ├── process.py          # 处理状态模型
+│   │   ├── character.py        # 角色模型
+│   │   ├── settings.py         # 设置模型
+│   │   └── cache.py            # 缓存模型
+│   └── utils/                  # 应用工具
+│       ├── __init__.py
+│       ├── config.py           # 配置管理
+│       ├── file_utils.py       # 文件工具
+│       └── system_utils.py     # 系统工具
 │
-├── backend/                     # 后端应用
-│   ├── app/
-│   │   ├── api/                # API路由
-│   │   │   ├── v1/             # API版本1
-│   │   │   │   ├── video.py    # 视频相关API
-│   │   │   │   ├── audio.py    # 音频相关API
-│   │   │   │   ├── translation.py # 翻译相关API
-│   │   │   │   ├── character.py # 角色相关API
-│   │   │   │   └── voice.py    # 声音相关API
-│   │   ├── core/               # 核心配置
-│   │   │   ├── config.py       # 应用配置
-│   │   │   ├── security.py     # 安全配置
-│   │   │   └── exceptions.py   # 异常处理
-│   │   ├── services/           # 业务逻辑
-│   │   │   ├── video_service.py
-│   │   │   ├── audio_service.py
-│   │   │   ├── translation_service.py
-│   │   │   ├── character_service.py
-│   │   │   ├── voice_service.py
-│   │   │   ├── step_manager.py     # 步骤管理服务
-│   │   │   ├── cache_manager.py    # 缓存管理服务
-│   │   │   ├── interrupt_handler.py # 中断处理服务
-│   │   │   └── process_orchestrator.py # 处理编排服务
-│   │   ├── models/             # 数据模型
-│   │   │   ├── video.py
-│   │   │   ├── audio.py
-│   │   │   ├── translation.py
-│   │   │   └── character.py
-│   │   ├── schemas/            # 数据模式
-│   │   │   ├── video.py
-│   │   │   ├── audio.py
-│   │   │   ├── translation.py
-│   │   │   └── character.py
-│   │   └── utils/              # 工具函数
-│   ├── tests/                  # 测试文件
-│   ├── requirements.txt
-│   └── main.py                 # 应用入口
+├── backend/                     # 本地后端服务
+│   ├── __init__.py
+│   ├── main.py                 # FastAPI服务入口
+│   ├── config.py               # 服务配置
+│   ├── api/                    # API路由
+│   │   ├── __init__.py
+│   │   ├── v1/                 # API版本1
+│   │   │   ├── __init__.py
+│   │   │   ├── video.py        # 视频相关API
+│   │   │   ├── audio.py        # 音频相关API
+│   │   │   ├── translation.py  # 翻译相关API
+│   │   │   ├── character.py    # 角色相关API
+│   │   │   ├── voice.py        # 声音相关API
+│   │   │   ├── process.py      # 处理流程API
+│   │   │   ├── cache.py        # 缓存管理API
+│   │   │   └── system.py       # 系统状态API
+│   │   └── websocket/          # WebSocket路由
+│   │       ├── __init__.py
+│   │       └── events.py       # 事件处理
+│   ├── services/               # 业务逻辑
+│   │   ├── __init__.py
+│   │   ├── video_service.py
+│   │   ├── audio_service.py
+│   │   ├── translation_service.py
+│   │   ├── character_service.py
+│   │   ├── voice_service.py
+│   │   ├── step_manager.py     # 步骤管理服务
+│   │   ├── cache_manager.py    # 缓存管理服务
+│   │   ├── interrupt_handler.py # 中断处理服务
+│   │   └── process_orchestrator.py # 处理编排服务
+│   ├── models/                 # 数据模型
+│   │   ├── __init__.py
+│   │   ├── video.py
+│   │   ├── audio.py
+│   │   ├── translation.py
+│   │   ├── character.py
+│   │   ├── process.py          # 处理流程模型
+│   │   └── cache.py            # 缓存模型
+│   ├── schemas/                # 数据模式
+│   │   ├── __init__.py
+│   │   ├── video.py
+│   │   ├── audio.py
+│   │   ├── translation.py
+│   │   ├── character.py
+│   │   ├── process.py
+│   │   └── cache.py
+│   ├── utils/                  # 工具函数
+│   │   ├── __init__.py
+│   │   ├── file_utils.py
+│   │   ├── audio_utils.py
+│   │   ├── video_utils.py
+│   │   └── system_utils.py
+│   ├── database/                # 数据库操作
+│   │   ├── __init__.py
+│   │   ├── connection.py       # 数据库连接
+│   │   ├── migrations.py       # 数据库迁移
+│   │   └── models.py           # 数据库模型
+│   └── tests/                  # 测试文件
+│       ├── __init__.py
+│       ├── test_services/
+│       └── test_api/
 │
 ├── ml-services/                # 机器学习服务
 │   ├── speech_recognition/     # 语音识别
@@ -244,32 +283,28 @@ movie-translate/
 
 ## 3. 技术选型
 
-### 3.1 前端技术栈
+### 3.1 桌面应用技术栈
 | 技术类别 | 选择 | 理由 |
 |---------|------|------|
-| **框架** | Next.js 14 | 全栈框架，支持SSR/SSG，内置优化 |
-| **UI库** | Ant Design | 企业级UI组件库，组件丰富 |
-| **状态管理** | Zustand | 轻量级状态管理，简单易用 |
-| **表单处理** | React Hook Form | 高性能表单处理，支持验证 |
-| **HTTP客户端** | Axios | 成熟稳定的HTTP客户端 |
-| **文件上传** | Uppy | 强大的文件上传库，支持拖拽 |
-| **实时通信** | WebSocket | 实时进度更新和状态同步 |
-| **构建工具** | Vite | 快速的构建工具 |
-| **类型检查** | TypeScript | 类型安全，提高代码质量 |
+| **UI框架** | CustomTkinter / PySide6 | 现代化桌面UI框架，跨平台支持 |
+| **备选方案** | PyQt6, Tkinter | 成熟稳定的桌面应用框架 |
+| **图形渲染** | Canvas / QPainter | 高性能图形绘制 |
+| **多线程** | threading / asyncio | 支持后台任务处理 |
+| **文件拖拽** | tkinterdnd2 / PySide6拖拽 | 原生拖拽支持 |
+| **系统托盘** | pystray | 系统托盘图标支持 |
+| **打包工具** | PyInstaller / Nuitka | 将Python应用打包为可执行文件 |
 
-### 3.2 后端技术栈
+### 3.2 本地服务技术栈
 | 技术类别 | 选择 | 理由 |
 |---------|------|------|
 | **框架** | FastAPI | 高性能异步框架，自动生成API文档 |
 | **ORM** | SQLAlchemy | 成熟的ORM，支持异步 |
-| **数据库** | PostgreSQL | 功能强大的关系型数据库 |
-| **缓存** | Redis | 高性能内存数据库，支持多种数据结构 |
-| **文件存储** | MinIO | 兼容S3的对象存储服务 |
-| **任务队列** | Celery + Redis | 分布式任务队列，支持异步处理 |
-| **认证** | JWT + OAuth2.0 | 标准的认证授权方案 |
+| **数据库** | SQLite | 轻量级本地数据库，无需额外服务 |
+| **文件存储** | 本地文件系统 | 简单可靠的文件存储 |
+| **任务队列** | ThreadPoolExecutor | 本地任务队列管理 |
+| **进程通信** | WebSocket / HTTP | 本地进程间通信 |
 | **API文档** | OpenAPI 3.0 | 自动生成API文档 |
 | **日志** | Loguru | 简单易用的日志库 |
-| **监控** | Prometheus + Grafana | 完整的监控解决方案 |
 
 ### 3.3 机器学习技术栈
 | 技术类别 | 选择 | 理由 |
@@ -282,20 +317,18 @@ movie-translate/
 | **角色识别** | PyAnnote, VoiceID | 说话人识别和聚类 |
 | **音频处理** | librosa, pydub | 音频分析和处理 |
 | **深度学习框架** | PyTorch | 灵活的深度学习框架 |
-| **模型服务** | TorchServe | 模型部署和推理服务 |
 | **GPU加速** | CUDA + cuDNN | GPU加速计算 |
 
-### 3.4 基础设施技术栈
+### 3.4 桌面应用开发工具
 | 技术类别 | 选择 | 理由 |
 |---------|------|------|
-| **容器化** | Docker + Docker Compose | 标准化的容器化部署 |
-| **编排** | Kubernetes (可选) | 大规模容器编排 |
-| **代理** | Nginx | 高性能反向代理 |
-| **监控** | Prometheus + Grafana | 完整的监控体系 |
-| **日志** | ELK Stack (可选) | 集中化日志管理 |
-| **CI/CD** | GitHub Actions | 自动化CI/CD流程 |
+| **打包工具** | PyInstaller | 将Python应用打包为可执行文件 |
+| **安装程序** | Inno Setup (Windows) | Windows安装程序制作 |
+| **图标制作** | GIMP / Inkscape | 图标和资源文件制作 |
+| **版本管理** | Git | 版本控制 |
 | **代码质量** | Black, isort, flake8 | 代码格式化和质量检查 |
-| **测试** | pytest, pytest-asyncio | 完整的测试框架 |
+| **测试** | pytest, pytest-qt | 完整的测试框架 |
+| **调试工具** | pdb, VS Code调试器 | 代码调试 |
 
 ## 4. 核心模块设计
 
@@ -600,11 +633,11 @@ class VoiceCloningService:
 
 ## 5. 数据库设计
 
-### 5.1 核心表结构
+### 5.1 核心表结构 (SQLite)
 ```sql
 -- 媒体文件表
 CREATE TABLE media_files (
-    id SERIAL PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     filename VARCHAR(255) NOT NULL,
     original_path VARCHAR(500) NOT NULL,
     file_type VARCHAR(20) NOT NULL, -- 'video' or 'audio'
@@ -612,7 +645,7 @@ CREATE TABLE media_files (
     resolution VARCHAR(50), -- 视频分辨率
     sample_rate INTEGER, -- 音频采样率
     channels INTEGER, -- 音频声道数
-    file_size BIGINT,
+    file_size INTEGER,
     format VARCHAR(10),
     status VARCHAR(20) DEFAULT 'pending',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -621,7 +654,7 @@ CREATE TABLE media_files (
 
 -- 音频轨道表（仅视频文件使用）
 CREATE TABLE audio_tracks (
-    id SERIAL PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     media_id INTEGER REFERENCES media_files(id),
     file_path VARCHAR(500) NOT NULL,
     duration INTEGER,
@@ -633,7 +666,7 @@ CREATE TABLE audio_tracks (
 
 -- 字幕表
 CREATE TABLE subtitles (
-    id SERIAL PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     media_id INTEGER REFERENCES media_files(id),
     language VARCHAR(10) NOT NULL,
     content TEXT NOT NULL, -- SRT格式
@@ -644,33 +677,33 @@ CREATE TABLE subtitles (
 
 -- 角色表
 CREATE TABLE characters (
-    id SERIAL PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     media_id INTEGER REFERENCES media_files(id),
     name VARCHAR(100),
     gender VARCHAR(10),
     character_type VARCHAR(20),
     total_duration INTEGER, -- 秒
     appearance_count INTEGER DEFAULT 0,
-    voice_features JSONB, -- 音色特征
+    voice_features TEXT, -- JSON格式存储音色特征
     model_path VARCHAR(500), -- 声音克隆模型路径
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 角色对话表
 CREATE TABLE character_dialogues (
-    id SERIAL PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     character_id INTEGER REFERENCES characters(id),
     subtitle_id INTEGER REFERENCES subtitles(id),
-    start_time FLOAT NOT NULL,
-    end_time FLOAT NOT NULL,
-    confidence FLOAT,
+    start_time REAL NOT NULL,
+    end_time REAL NOT NULL,
+    confidence REAL,
     audio_segment_path VARCHAR(500),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 任务队列表
 CREATE TABLE tasks (
-    id SERIAL PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_type VARCHAR(50) NOT NULL,
     media_id INTEGER REFERENCES media_files(id),
     status VARCHAR(20) DEFAULT 'pending',
@@ -683,7 +716,7 @@ CREATE TABLE tasks (
 
 -- 缓存表
 CREATE TABLE cache (
-    id SERIAL PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     cache_key VARCHAR(255) UNIQUE NOT NULL,
     cache_value TEXT NOT NULL,
     expires_at TIMESTAMP,
@@ -692,7 +725,7 @@ CREATE TABLE cache (
 
 -- 系统配置表
 CREATE TABLE system_config (
-    id SERIAL PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     config_key VARCHAR(100) UNIQUE NOT NULL,
     config_value TEXT NOT NULL,
     description TEXT,
@@ -778,137 +811,185 @@ async def handle_character_update(websocket, data):
 
 ## 7. 部署方案
 
-### 7.1 Docker部署
-```yaml
-# docker-compose.yml
-version: '3.8'
+### 7.1 桌面应用打包方案
+```python
+# build.py - 桌面应用打包脚本
+import os
+import sys
+import subprocess
+import shutil
+from pathlib import Path
 
-services:
-  frontend:
-    build: ./frontend
-    ports:
-      - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+def build_desktop_app():
+    """构建桌面应用"""
+    print("开始构建桌面应用...")
+    
+    # 1. 安装依赖
+    print("安装Python依赖...")
+    subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+    
+    # 2. 下载模型文件
+    print("下载模型文件...")
+    subprocess.run([sys.executable, "scripts/download_models.py"])
+    
+    # 3. 初始化数据库
+    print("初始化数据库...")
+    subprocess.run([sys.executable, "scripts/setup_db.py"])
+    
+    # 4. 使用PyInstaller打包
+    print("打包应用...")
+    cmd = [
+        "pyinstaller",
+        "--name=MovieTranslator",
+        "--windowed",
+        "--onefile",
+        "--add-data=data;data",
+        "--add-data=resources;resources",
+        "--icon=resources/icons/app.ico",
+        "--hidden-import=pydub",
+        "--hidden-import=librosa",
+        "--hidden-import=whisper",
+        "app/main.py"
+    ]
+    subprocess.run(cmd)
+    
+    # 5. 创建安装程序
+    print("创建安装程序...")
+    create_installer()
+    
+    print("构建完成!")
 
-  backend:
-    build: ./backend
-    ports:
-      - "8000:8000"
-    depends_on:
-      - postgres
-      - redis
-      - minio
-    environment:
-      - DATABASE_URL=postgresql://user:password@postgres:5432/movie_translate
-      - REDIS_URL=redis://redis:6379
-      - MINIO_ENDPOINT=minio:9000
+def create_installer():
+    """创建安装程序 (Inno Setup)"""
+    # 生成Inno Setup脚本
+    iss_content = """
+[Setup]
+AppName=Movie Translator
+AppVersion=1.0
+DefaultDirName={pf}\\Movie Translator
+DefaultGroupName=Movie Translator
+OutputDir=dist
+OutputBaseFilename=MovieTranslator-Setup
 
-  postgres:
-    image: postgres:15
-    environment:
-      POSTGRES_DB: movie_translate
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+[Files]
+Source: "dist\\MovieTranslator.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "data\\*"; DestDir: "{app}\\data"; Flags: ignoreversion recursesubdirs
+Source: "resources\\*"; DestDir: "{app}\\resources"; Flags: ignoreversion recursesubdirs
 
-  redis:
-    image: redis:7-alpine
-    volumes:
-      - redis_data:/data
+[Icons]
+Name: "{group}\\Movie Translator"; Filename: "{app}\\MovieTranslator.exe"
+Name: "{commondesktop}\\Movie Translator"; Filename: "{app}\\MovieTranslator.exe"
 
-  minio:
-    image: minio/minio
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    environment:
-      MINIO_ROOT_USER: admin
-      MINIO_ROOT_PASSWORD: password
-    command: server /data --console-address ":9001"
-    volumes:
-      - minio_data:/data
+[Run]
+Filename: "{app}\\MovieTranslator.exe"; Description: "{cm:LaunchProgram,Movie Translator}"; Flags: nowait postinstall skipifsilent
+"""
+    
+    with open("build/setup.iss", "w", encoding="utf-8") as f:
+        f.write(iss_content)
+    
+    # 编译安装程序
+    subprocess.run(["iscc", "build/setup.iss"])
 
-  celery_worker:
-    build: ./backend
-    command: celery -A app.worker worker --loglevel=info
-    depends_on:
-      - postgres
-      - redis
-    environment:
-      - DATABASE_URL=postgresql://user:password@postgres:5432/movie_translate
-      - REDIS_URL=redis://redis:6379
-
-volumes:
-  postgres_data:
-  redis_data:
-  minio_data:
+if __name__ == "__main__":
+    build_desktop_app()
 ```
 
-### 7.2 生产环境部署
-```yaml
-# docker-compose.prod.yml
-version: '3.8'
+### 7.2 应用启动脚本
+```python
+# run.py - 应用启动脚本
+import os
+import sys
+import subprocess
+import threading
+import time
+from pathlib import Path
 
-services:
-  nginx:
-    image: nginx:alpine
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf
-      - ./ssl:/etc/nginx/ssl
-    depends_on:
-      - frontend
-      - backend
+def start_backend_server():
+    """启动后端服务"""
+    backend_dir = Path(__file__).parent / "backend"
+    os.chdir(backend_dir)
+    
+    # 启动FastAPI服务器
+    cmd = [sys.executable, "main.py", "--host", "127.0.0.1", "--port", "8000"]
+    subprocess.run(cmd)
 
-  frontend:
-    build: ./frontend
-    environment:
-      - NEXT_PUBLIC_API_URL=https://api.example.com
+def start_desktop_app():
+    """启动桌面应用"""
+    app_dir = Path(__file__).parent / "app"
+    os.chdir(app_dir)
+    
+    # 启动桌面应用
+    cmd = [sys.executable, "main.py"]
+    subprocess.run(cmd)
 
-  backend:
-    build: ./backend
-    environment:
-      - DATABASE_URL=postgresql://user:password@postgres:5432/movie_translate
-      - REDIS_URL=redis://redis:6379
-      - MINIO_ENDPOINT=minio:9000
-    deploy:
-      replicas: 3
+def main():
+    """主函数"""
+    print("启动电影翻译系统...")
+    
+    # 启动后端服务（在单独线程中）
+    backend_thread = threading.Thread(target=start_backend_server)
+    backend_thread.daemon = True
+    backend_thread.start()
+    
+    # 等待后端服务启动
+    time.sleep(3)
+    
+    # 启动桌面应用
+    start_desktop_app()
 
-  postgres:
-    image: postgres:15
-    environment:
-      POSTGRES_DB: movie_translate
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    deploy:
-      replicas: 1
+if __name__ == "__main__":
+    main()
+```
 
-  redis:
-    image: redis:7-alpine
-    volumes:
-      - redis_data:/data
-    deploy:
-      replicas: 2
+### 7.3 系统要求检查脚本
+```python
+# scripts/check_system.py
+import platform
+import psutil
+import GPUtil
+import sys
 
-  monitoring:
-    image: prom/prometheus
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+def check_system_requirements():
+    """检查系统要求"""
+    print("检查系统要求...")
+    
+    # 操作系统
+    print(f"操作系统: {platform.system()} {platform.release()}")
+    
+    # CPU
+    cpu_count = psutil.cpu_count()
+    print(f"CPU核心数: {cpu_count}")
+    if cpu_count < 4:
+        print("警告: CPU核心数建议4核以上")
+    
+    # 内存
+    memory = psutil.virtual_memory()
+    print(f"内存: {memory.total // (1024**3)}GB")
+    if memory.total < 8 * 1024**3:
+        print("警告: 内存建议8GB以上")
+    
+    # GPU
+    try:
+        gpus = GPUtil.getGPUs()
+        if gpus:
+            gpu = gpus[0]
+            print(f"GPU: {gpu.name} ({gpu.memoryTotal}MB)")
+        else:
+            print("警告: 未检测到GPU，将使用CPU处理（速度较慢）")
+    except:
+        print("警告: 无法检测GPU信息")
+    
+    # 磁盘空间
+    disk = psutil.disk_usage('/')
+    free_space_gb = disk.free // (1024**3)
+    print(f"可用磁盘空间: {free_space_gb}GB")
+    if free_space_gb < 20:
+        print("警告: 可用磁盘空间建议20GB以上")
+    
+    print("系统要求检查完成!")
 
-  grafana:
-    image: grafana/grafana
-    ports:
-      - "3001:3000"
-    volumes:
-      - grafana_data:/var/lib/grafana
+if __name__ == "__main__":
+    check_system_requirements()
 ```
 
 ## 8. 性能优化策略
