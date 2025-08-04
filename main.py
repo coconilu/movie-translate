@@ -40,9 +40,14 @@ def main():
         # Start the application
         logger.info("Application initialized successfully")
         
-        # TODO: Start GUI application
-        print("Movie Translate application initialized successfully!")
-        print("GUI application will be implemented in the next phase.")
+        # Start GUI application
+        from movie_translate.ui.main_app import MovieTranslateApp
+        import tkinter as tk
+        
+        # Create and run the application
+        app = MovieTranslateApp()
+        app.protocol("WM_DELETE_WINDOW", app.on_closing)
+        app.mainloop()
         
         return 0
         
