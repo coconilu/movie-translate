@@ -104,6 +104,17 @@ class APIKeys:
 
 
 @dataclass
+class DatabaseSettings:
+    """Database configuration settings"""
+    url: str = "sqlite:///movie_translate.db"
+    echo: bool = False
+    pool_size: int = 10
+    max_overflow: int = 20
+    pool_timeout: int = 30
+    pool_recycle: int = 3600
+
+
+@dataclass
 class UISettings:
     """User interface settings"""
     theme: str = "system"  # light, dark, system
@@ -123,6 +134,7 @@ class Settings:
     service: ServiceSettings = field(default_factory=ServiceSettings)
     api: APISettings = field(default_factory=APISettings)
     api_keys: APIKeys = field(default_factory=APIKeys)
+    database: DatabaseSettings = field(default_factory=DatabaseSettings)
     ui: UISettings = field(default_factory=UISettings)
     
     # Paths
@@ -133,6 +145,9 @@ class Settings:
     # Development
     debug: bool = False
     log_level: str = "INFO"
+    
+    # Version
+    __version__: str = "1.0.0"
     
     def __post_init__(self):
         """Initialize paths after creation"""
@@ -196,6 +211,14 @@ class Settings:
                 "google_translate_api_key": self.api_keys.google_translate_api_key,
                 "minimax_api_key": self.api_keys.minimax_api_key,
                 "minimax_group_id": self.api_keys.minimax_group_id
+            },
+            "database": {
+                "url": self.database.url,
+                "echo": self.database.echo,
+                "pool_size": self.database.pool_size,
+                "max_overflow": self.database.max_overflow,
+                "pool_timeout": self.database.pool_timeout,
+                "pool_recycle": self.database.pool_recycle
             },
             "ui": {
                 "theme": self.ui.theme,
@@ -285,6 +308,16 @@ class Settings:
                 self.api_keys.minimax_api_key = api_keys_data.get("minimax_api_key")
                 self.api_keys.minimax_group_id = api_keys_data.get("minimax_group_id")
             
+            # Load database settings
+            if "database" in config_data:
+                database_data = config_data["database"]
+                self.database.url = database_data.get("url", self.database.url)
+                self.database.echo = database_data.get("echo", self.database.echo)
+                self.database.pool_size = database_data.get("pool_size", self.database.pool_size)
+                self.database.max_overflow = database_data.get("max_overflow", self.database.max_overflow)
+                self.database.pool_timeout = database_data.get("pool_timeout", self.database.pool_timeout)
+                self.database.pool_recycle = database_data.get("pool_recycle", self.database.pool_recycle)
+            
             # Load UI settings
             if "ui" in config_data:
                 ui_data = config_data["ui"]
@@ -335,6 +368,30 @@ class Settings:
     def get_api_key(self, key_name: str) -> Optional[str]:
         """Get API key by name"""
         return getattr(self.api_keys, key_name, None)
+    
+    def get_database_url(self) -> str:
+        """Get database URL with environment variable support"""
+        # Check environment variable first
+        db_url = os.environ.get("DATABASE_URL")
+        if db_url:
+            return db_url
+        
+        # Use configured URL
+        return self.database.url
+    
+    def get_system_info(self) -> Dict[str, Any]:
+        """Get system information"""
+        return {
+            "platform": platform.system(),
+            "platform_version": platform.version(),
+            "architecture": platform.machine(),
+            "processor": platform.processor(),
+            "python_version": platform.python_version(),
+            "app_dir": str(self.app_dir),
+            "config_file": str(self.config_file),
+            "log_file": str(self.log_file),
+            "database_url": self.get_database_url()
+        }
 
 
 # Global settings instance

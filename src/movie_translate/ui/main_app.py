@@ -12,12 +12,15 @@ from typing import Optional, Dict, Any
 import json
 
 from ..core import logger, settings
+from ..core.interrupt_recovery import get_interrupt_recovery
 from ..api.client import APIClient, ProjectManager
+from ..models import initialize_database
 from .step_navigator import StepNavigator
 from .file_import import FileImportFrame
 from .character_manager import CharacterManagerFrame
 from .settings_panel import SettingsPanel
 from .progress_display import ProgressDisplay
+from .recovery_dialog import show_recovery_dialog
 
 
 class MovieTranslateApp(ctk.CTk):
@@ -25,6 +28,14 @@ class MovieTranslateApp(ctk.CTk):
     
     def __init__(self):
         super().__init__()
+        
+        # Initialize database
+        try:
+            initialize_database()
+            logger.info("Database initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize database: {e}")
+            messagebox.showerror("数据库错误", f"数据库初始化失败: {e}")
         
         # Initialize API client
         self.api_client = APIClient()
@@ -57,6 +68,12 @@ class MovieTranslateApp(ctk.CTk):
         
         # Setup async event loop
         self._setup_async_loop()
+        
+        # Start interrupt recovery
+        self._start_interrupt_recovery()
+        
+        # Check for recovery data
+        self._check_recovery()
         
         logger.info("Main UI application initialized")
     
@@ -154,7 +171,16 @@ class MovieTranslateApp(ctk.CTk):
             command=self._open_settings,
             width=200
         )
-        self.settings_btn.grid(row=5, column=0, padx=10, pady=20)
+        self.settings_btn.grid(row=5, column=0, padx=10, pady=5)
+        
+        # Recovery button
+        self.recovery_btn = ctk.CTkButton(
+            self.sidebar,
+            text="恢复管理",
+            command=self._open_recovery_dialog,
+            width=200
+        )
+        self.recovery_btn.grid(row=6, column=0, padx=10, pady=5)
         
         # Export button
         self.export_btn = ctk.CTkButton(
@@ -395,6 +421,14 @@ class MovieTranslateApp(ctk.CTk):
         cancel_btn = ctk.CTkButton(button_frame, text="取消", command=dialog.destroy)
         cancel_btn.grid(row=0, column=1, padx=10)
     
+    def _open_recovery_dialog(self):
+        """Open recovery management dialog"""
+        try:
+            show_recovery_dialog(self)
+        except Exception as e:
+            logger.error(f"Failed to open recovery dialog: {e}")
+            messagebox.showerror("错误", f"打开恢复对话框失败: {e}")
+    
     def _open_project(self):
         """Open existing project"""
         file_path = filedialog.askopenfilename(
@@ -596,7 +630,113 @@ Movie Translate 使用指南
         if self.async_loop and self.async_loop.is_running():
             self.async_loop.call_soon_threadsafe(self.async_loop.stop)
         
+        # Stop interrupt recovery
+        self._stop_interrupt_recovery()
+        
+        # Save current state before closing
+        self._save_current_state()
+        
         self.destroy()
+    
+    def _check_recovery(self):
+        """Check for recovery data on startup"""
+        try:
+            interrupt_recovery = get_interrupt_recovery()
+            
+            if interrupt_recovery.has_recovery_state():
+                # Show recovery dialog
+                recovery_data = show_recovery_dialog(self)
+                
+                if recovery_data:
+                    self.load_recovery_data(recovery_data)
+        except Exception as e:
+            logger.error(f"Failed to check recovery: {e}")
+    
+    def load_recovery_data(self, recovery_data: Dict[str, Any]):
+        """Load recovery data into application"""
+        try:
+            # Load project data
+            if 'project' in recovery_data:
+                self.current_project = recovery_data['project']
+                self._update_project_display()
+                
+                # Load project data into frames
+                if 'video_file' in self.current_project:
+                    self.frames['file_import'].set_video_file(self.current_project['video_file'])
+                
+                if 'characters' in self.current_project:
+                    self.frames['character_manager'].set_characters(self.current_project['characters'])
+                
+                if 'current_step' in self.current_project:
+                    self._navigate_to_step(self.current_project['current_step'])
+            
+            # Load step data
+            if 'steps' in recovery_data:
+                for step_id, step_info in recovery_data['steps'].items():
+                    step_index = int(step_id)
+                    if step_index < len(self.frames):
+                        frame_name = list(self.frames.keys())[step_index]
+                        if hasattr(self.frames[frame_name], 'load_step_data'):
+                            self.frames[frame_name].load_step_data(step_info['data'])
+            
+            logger.info("Recovery data loaded successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to load recovery data: {e}")
+    
+    def _save_current_state(self):
+        """Save current application state for recovery"""
+        try:
+            interrupt_recovery = get_interrupt_recovery()
+            
+            # Save project state
+            if self.current_project:
+                interrupt_recovery.update_project_state(self.current_project)
+            
+            # Save step states
+            for i, (frame_name, frame) in enumerate(self.frames.items()):
+                if hasattr(frame, 'get_step_data'):
+                    step_data = frame.get_step_data()
+                    if step_data:
+                        interrupt_recovery.update_step_state(i, step_data)
+            
+            logger.info("Current state saved for recovery")
+            
+        except Exception as e:
+            logger.error(f"Failed to save current state: {e}")
+    
+    def create_checkpoint(self, checkpoint_name: str):
+        """Create a named checkpoint"""
+        try:
+            # Save current state first
+            self._save_current_state()
+            
+            # Create checkpoint
+            interrupt_recovery = get_interrupt_recovery()
+            interrupt_recovery.create_checkpoint(checkpoint_name)
+            
+            logger.info(f"Checkpoint '{checkpoint_name}' created")
+            
+        except Exception as e:
+            logger.error(f"Failed to create checkpoint: {e}")
+    
+    def _start_interrupt_recovery(self):
+        """Start interrupt recovery auto-save"""
+        try:
+            interrupt_recovery = get_interrupt_recovery()
+            interrupt_recovery.start_auto_save()
+            logger.info("Interrupt recovery auto-save started")
+        except Exception as e:
+            logger.error(f"Failed to start interrupt recovery: {e}")
+    
+    def _stop_interrupt_recovery(self):
+        """Stop interrupt recovery auto-save"""
+        try:
+            interrupt_recovery = get_interrupt_recovery()
+            interrupt_recovery.stop_auto_save()
+            logger.info("Interrupt recovery auto-save stopped")
+        except Exception as e:
+            logger.error(f"Failed to stop interrupt recovery: {e}")
 
 
 def main():
