@@ -11,16 +11,16 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 import json
 
-from ..core import logger, settings
-from ..core.interrupt_recovery import get_interrupt_recovery
-from ..api.client import APIClient, ProjectManager
-from ..models import initialize_database
-from .step_navigator import StepNavigator
-from .file_import import FileImportFrame
-from .character_manager import CharacterManagerFrame
-from .settings_panel import SettingsPanel
-from .progress_display import ProgressDisplay
-from .recovery_dialog import show_recovery_dialog
+from movie_translate.core import logger, settings
+from movie_translate.core.interrupt_recovery import get_interrupt_recovery
+from movie_translate.api.client import APIClient, ProjectManager
+from movie_translate.models import initialize_database
+from movie_translate.ui.step_navigator import StepNavigator
+from movie_translate.ui.file_import import FileImportFrame
+from movie_translate.ui.character_manager import CharacterManagerFrame
+from movie_translate.ui.settings_panel import SettingsPanel
+from movie_translate.ui.progress_display import ProgressDisplay
+from movie_translate.ui.recovery_dialog import show_recovery_dialog
 
 
 class MovieTranslateApp(ctk.CTk):

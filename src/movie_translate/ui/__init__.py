@@ -2,18 +2,21 @@
 UI module initialization
 """
 
-from .main_window import MainWindow
-from .step_navigation import StepNavigation
-from .file_import_widget import FileImportWidget
-from .character_manager_widget import CharacterManagerWidget
-from .settings_widget import SettingsWidget
-from .progress_widget import ProgressWidget
+from .main_app import MovieTranslateApp, main
+from .step_navigator import StepNavigator
+from .file_import import FileImportFrame
+from .character_manager import CharacterManagerFrame
+from .settings_panel import SettingsPanel
+from .progress_display import ProgressDisplay
+from .recovery_dialog import show_recovery_dialog
 
 __all__ = [
-    "MainWindow",
-    "StepNavigation",
-    "FileImportWidget",
-    "CharacterManagerWidget",
-    "SettingsWidget",
-    "ProgressWidget"
+    "MovieTranslateApp",
+    "main",
+    "StepNavigator",
+    "FileImportFrame",
+    "CharacterManagerFrame",
+    "SettingsPanel",
+    "ProgressDisplay",
+    "show_recovery_dialog"
 ]

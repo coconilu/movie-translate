@@ -99,6 +99,13 @@ cp config.example.json config.json
 ### 5. 启动应用
 
 ```bash
+# 使用系统Python
+python run_app.py
+
+# 或者使用uv
+uv run python run_app.py
+
+# 或者直接运行（需要确保src在Python路径中）
 uv run python src/movie_translate/ui/main_app.py
 ```
 

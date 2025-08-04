@@ -45,6 +45,7 @@ class AudioSettings:
     quality: str = "high"
     noise_reduction: bool = True
     normalize: bool = True
+    chunk_size: int = 1024
 
 
 @dataclass
@@ -76,6 +77,54 @@ class ServiceSettings:
     voice_clone: VoiceCloneService = VoiceCloneService.F5_TTS
     fallback_to_local: bool = True
     cost_budget_monthly: float = 50.0
+
+
+@dataclass
+class SpeechRecognitionSettings:
+    """Speech recognition specific settings"""
+    primary_service: SpeechRecognitionService = SpeechRecognitionService.SENSE_VOICE
+    default_language: str = "zh"
+    batch_size: int = 100
+    enable_diarization: bool = True
+    min_speech_duration: float = 0.5
+    max_silence_gap: float = 2.0
+
+
+@dataclass
+class TranslationSettings:
+    """Translation specific settings"""
+    primary_service: TranslationService = TranslationService.DEEPSEEK
+    default_source_language: str = "zh"
+    default_target_language: str = "en"
+    batch_size: int = 100
+    deepseek_model: str = "deepseek-chat"
+    glm_model: str = "glm-4"
+    enable_cache: bool = True
+    max_retries: int = 3
+
+
+@dataclass
+class VoiceCloningSettings:
+    """Voice cloning specific settings"""
+    primary_service: VoiceCloneService = VoiceCloneService.F5_TTS
+    minimax_model_id: str = "speech-01"
+    minimax_voice_id: str = "female-tianmei-jingpin"
+    batch_size: int = 10
+    enable_cache: bool = True
+    max_retries: int = 3
+    quality_preset: str = "high"
+
+
+@dataclass
+class VideoSettings:
+    """Video processing settings"""
+    target_resolution: str = "1920x1080"
+    target_fps: int = 30
+    target_bitrate: str = "5000k"
+    target_codec: str = "libx264"
+    target_format: str = "mp4"
+    quality_preset: str = "high"
+    enable_gpu_acceleration: bool = True
 
 
 @dataclass
@@ -132,6 +181,10 @@ class Settings:
     cache: CacheSettings = field(default_factory=CacheSettings)
     processing: ProcessingSettings = field(default_factory=ProcessingSettings)
     service: ServiceSettings = field(default_factory=ServiceSettings)
+    speech: SpeechRecognitionSettings = field(default_factory=SpeechRecognitionSettings)
+    translation: TranslationSettings = field(default_factory=TranslationSettings)
+    voice_cloning: VoiceCloningSettings = field(default_factory=VoiceCloningSettings)
+    video: VideoSettings = field(default_factory=VideoSettings)
     api: APISettings = field(default_factory=APISettings)
     api_keys: APIKeys = field(default_factory=APIKeys)
     database: DatabaseSettings = field(default_factory=DatabaseSettings)
