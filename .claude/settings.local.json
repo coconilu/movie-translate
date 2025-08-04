@@ -6,7 +6,8 @@
       "Bash(mkdir:*)",
       "Bash(python:*)",
       "Bash(timeout:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(ls:*)"
     ],
     "deny": []
   }
