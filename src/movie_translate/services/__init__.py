@@ -2,20 +2,33 @@
 Services module initialization
 """
 
-from .file_service import FileService
-from .audio_service import AudioService
-from .speech_service import SpeechService
-from .translation_service import TranslationService
-from .character_service import CharacterService
-from .voice_clone_service import VoiceCloneService
-from .video_service import VideoService
+from .audio_processing import AudioProcessingService, audio_processing_service, AudioSegment, AudioAnalysisResult
+from .speech_recognition import SpeechRecognitionService, speech_recognition_service, SpeechRecognitionResult
+from .translation import TranslationService, translation_service, TranslationResult
+from .character_identification import CharacterIdentificationService, character_identification_service, VoiceProfile, CharacterIdentificationResult
+from .voice_cloning import VoiceCloningService, voice_cloning_service, VoiceCloningResult, VoiceModel
+from .video_synthesis import VideoSynthesisService, video_synthesis_service, VideoSynthesisResult
 
 __all__ = [
-    "FileService",
-    "AudioService",
-    "SpeechService",
+    "AudioProcessingService",
+    "audio_processing_service", 
+    "AudioSegment",
+    "AudioAnalysisResult",
+    "SpeechRecognitionService",
+    "speech_recognition_service",
+    "SpeechRecognitionResult",
     "TranslationService",
-    "CharacterService",
-    "VoiceCloneService",
-    "VideoService"
+    "translation_service",
+    "TranslationResult",
+    "CharacterIdentificationService",
+    "character_identification_service",
+    "VoiceProfile",
+    "CharacterIdentificationResult",
+    "VoiceCloningService",
+    "voice_cloning_service",
+    "VoiceCloningResult",
+    "VoiceModel",
+    "VideoSynthesisService",
+    "video_synthesis_service",
+    "VideoSynthesisResult"
 ]
