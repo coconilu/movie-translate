@@ -276,8 +276,47 @@ class TranslationService:
         self.glm_service = GLMTranslation()
         self.primary_service = settings.translation.primary_service
         
+    async def _initialize(self):
+        """Initialize the service"""
+        logger.info("Translation service initialized")
+        return True
+        
+    async def translate_text(self, text: str, source_lang: str, target_lang: str) -> TranslationResult:
+        """Translate text using primary service"""
+        try:
+            if not text.strip():
+                return TranslationResult(text, text, source_lang, target_lang, 1.0)
+            
+            # Normalize language codes
+            source_lang = self._normalize_language_code(source_lang)
+            target_lang = self._normalize_language_code(target_lang)
+            
+            # Use primary service
+            if self.primary_service == "deepseek":
+                result = await self.deepseek_service.translate(text, source_lang, target_lang)
+            elif self.primary_service == "glm":
+                result = await self.glm_service.translate(text, source_lang, target_lang)
+            else:
+                raise ValueError(f"Unsupported primary service: {self.primary_service}")
+            
+            # Set language codes
+            result.source_lang = source_lang
+            result.target_lang = target_lang
+            
+            logger.info(f"Translation completed: {text[:30]}... -> {result.translated_text[:30]}...")
+            return result
+            
+        except Exception as e:
+            error_handler.handle_error(
+                error=e,
+                context={"text": text[:50], "source_lang": source_lang, "target_lang": target_lang},
+                category=ErrorCategory.API,
+                severity=ErrorSeverity.HIGH
+            )
+            raise
+    
         # Language mapping
-        self.language_codes = {
+    language_codes = {
             "chinese": "zh",
             "english": "en",
             "japanese": "ja",
@@ -573,7 +612,7 @@ class TranslationService:
                 error=e,
                 context={"output_path": output_path},
                 category=ErrorCategory.FILE_SYSTEM,
-                Severity=ErrorSeverity.MEDIUM
+                severity=ErrorSeverity.MEDIUM
             )
             raise
     

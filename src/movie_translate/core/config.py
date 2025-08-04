@@ -79,6 +79,18 @@ class ServiceSettings:
 
 
 @dataclass
+class APISettings:
+    """API server settings"""
+    host: str = "localhost"
+    port: int = 8000
+    debug: bool = False
+    cors_origins: List[str] = field(default_factory=lambda: ["*"])
+    max_file_size: int = 100 * 1024 * 1024  # 100MB
+    timeout: int = 300
+    enable_docs: bool = True
+
+
+@dataclass
 class APIKeys:
     """API keys configuration"""
     baidu_speech_app_id: Optional[str] = None
@@ -109,6 +121,7 @@ class Settings:
     cache: CacheSettings = field(default_factory=CacheSettings)
     processing: ProcessingSettings = field(default_factory=ProcessingSettings)
     service: ServiceSettings = field(default_factory=ServiceSettings)
+    api: APISettings = field(default_factory=APISettings)
     api_keys: APIKeys = field(default_factory=APIKeys)
     ui: UISettings = field(default_factory=UISettings)
     
@@ -164,6 +177,15 @@ class Settings:
                 "voice_clone": self.service.voice_clone.value,
                 "fallback_to_local": self.service.fallback_to_local,
                 "cost_budget_monthly": self.service.cost_budget_monthly
+            },
+            "api": {
+                "host": self.api.host,
+                "port": self.api.port,
+                "debug": self.api.debug,
+                "cors_origins": self.api.cors_origins,
+                "max_file_size": self.api.max_file_size,
+                "timeout": self.api.timeout,
+                "enable_docs": self.api.enable_docs
             },
             "api_keys": {
                 "baidu_speech_app_id": self.api_keys.baidu_speech_app_id,
@@ -240,17 +262,28 @@ class Settings:
                 self.service.fallback_to_local = service_data.get("fallback_to_local", self.service.fallback_to_local)
                 self.service.cost_budget_monthly = service_data.get("cost_budget_monthly", self.service.cost_budget_monthly)
             
+            # Load API settings
+            if "api" in config_data:
+                api_data = config_data["api"]
+                self.api.host = api_data.get("host", self.api.host)
+                self.api.port = api_data.get("port", self.api.port)
+                self.api.debug = api_data.get("debug", self.api.debug)
+                self.api.cors_origins = api_data.get("cors_origins", self.api.cors_origins)
+                self.api.max_file_size = api_data.get("max_file_size", self.api.max_file_size)
+                self.api.timeout = api_data.get("timeout", self.api.timeout)
+                self.api.enable_docs = api_data.get("enable_docs", self.api.enable_docs)
+            
             # Load API keys
             if "api_keys" in config_data:
-                api_data = config_data["api_keys"]
-                self.api_keys.baidu_speech_app_id = api_data.get("baidu_speech_app_id")
-                self.api_keys.baidu_speech_api_key = api_data.get("baidu_speech_api_key")
-                self.api_keys.baidu_speech_secret_key = api_data.get("baidu_speech_secret_key")
-                self.api_keys.deepseek_api_key = api_data.get("deepseek_api_key")
-                self.api_keys.glm_api_key = api_data.get("glm_api_key")
-                self.api_keys.google_translate_api_key = api_data.get("google_translate_api_key")
-                self.api_keys.minimax_api_key = api_data.get("minimax_api_key")
-                self.api_keys.minimax_group_id = api_data.get("minimax_group_id")
+                api_keys_data = config_data["api_keys"]
+                self.api_keys.baidu_speech_app_id = api_keys_data.get("baidu_speech_app_id")
+                self.api_keys.baidu_speech_api_key = api_keys_data.get("baidu_speech_api_key")
+                self.api_keys.baidu_speech_secret_key = api_keys_data.get("baidu_speech_secret_key")
+                self.api_keys.deepseek_api_key = api_keys_data.get("deepseek_api_key")
+                self.api_keys.glm_api_key = api_keys_data.get("glm_api_key")
+                self.api_keys.google_translate_api_key = api_keys_data.get("google_translate_api_key")
+                self.api_keys.minimax_api_key = api_keys_data.get("minimax_api_key")
+                self.api_keys.minimax_group_id = api_keys_data.get("minimax_group_id")
             
             # Load UI settings
             if "ui" in config_data:
@@ -298,6 +331,10 @@ class Settings:
             "config_file": str(self.config_file),
             "log_file": str(self.log_file)
         }
+    
+    def get_api_key(self, key_name: str) -> Optional[str]:
+        """Get API key by name"""
+        return getattr(self.api_keys, key_name, None)
 
 
 # Global settings instance

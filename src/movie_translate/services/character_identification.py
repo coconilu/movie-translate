@@ -81,11 +81,16 @@ class CharacterIdentificationService:
         # Load existing profiles
         self._load_voice_profiles()
         
-        # Voice feature extraction parameters
-        self.n_mfcc = 20
-        self.n_mels = 128
-        self.hop_length = 512
-        self.n_fft = 2048
+    async def _initialize(self):
+        """Initialize the service"""
+        logger.info("Character identification service initialized")
+        return True
+        
+      # Voice feature extraction parameters
+    n_mfcc = 20
+    n_mels = 128
+    hop_length = 512
+    n_fft = 2048
         
     async def identify_characters(self, audio_analysis: AudioAnalysisResult) -> AudioAnalysisResult:
         """Identify characters in audio segments"""

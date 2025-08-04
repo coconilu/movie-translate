@@ -402,7 +402,7 @@ class MiniMaxService:
                 error=e,
                 context={"operation": "analyze_audio_quality"},
                 category=ErrorCategory.PROCESSING,
-                Severity=ErrorSeverity.MEDIUM
+                severity=ErrorSeverity.MEDIUM
             )
             return {}
 
@@ -423,6 +423,11 @@ class VoiceCloningService:
         
         # Load existing voice models
         self._load_voice_models()
+        
+    async def _initialize(self):
+        """Initialize the service"""
+        logger.info("Voice cloning service initialized")
+        return True
     
     async def clone_voice_for_character(self, character_id: str, text: str, 
                                       output_path: str) -> VoiceCloningResult:

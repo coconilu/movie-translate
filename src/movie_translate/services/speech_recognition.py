@@ -38,6 +38,11 @@ class BaiduSpeechRecognition:
         self.access_token = None
         self.token_expires = None
         
+    async def _initialize(self):
+        """Initialize the service"""
+        logger.info("Baidu speech recognition service initialized")
+        return True
+        
     async def recognize(self, audio_data: np.ndarray, sample_rate: int, 
                        language: str = "zh") -> SpeechRecognitionResult:
         """Recognize speech using Baidu API"""
@@ -188,6 +193,11 @@ class SenseVoiceRecognition:
         self.model = None
         self.model_loaded = False
         
+    async def _initialize(self):
+        """Initialize the service"""
+        logger.info("SenseVoice speech recognition service initialized")
+        return True
+        
     async def recognize(self, audio_data: np.ndarray, sample_rate: int, 
                        language: str = "zh") -> SpeechRecognitionResult:
         """Recognize speech using SenseVoice"""
@@ -305,6 +315,11 @@ class SpeechRecognitionService:
         self.baidu_service = BaiduSpeechRecognition()
         self.sensevoice_service = SenseVoiceRecognition()
         self.primary_service = settings.speech.primary_service
+        
+    async def _initialize(self):
+        """Initialize the service"""
+        logger.info("Speech recognition service initialized")
+        return True
         
     async def recognize_segment(self, segment: AudioSegment, 
                               language: str = "auto") -> SpeechRecognitionResult:

@@ -59,6 +59,11 @@ class VideoSynthesisService:
         self.target_bitrate = settings.video.target_bitrate
         self.target_codec = settings.video.target_codec
         
+    async def _initialize(self):
+        """Initialize the service"""
+        logger.info("Video synthesis service initialized")
+        return True
+        
     async def synthesize_video(self, original_video_path: str, 
                              audio_analysis: AudioAnalysisResult,
                              cloned_audio_results: List[VoiceCloningResult],

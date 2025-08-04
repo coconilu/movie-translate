@@ -54,6 +54,11 @@ class AudioProcessingService:
         self.chunk_size = settings.audio.chunk_size
         self.temp_dir = settings.get_temp_path()
         
+    async def _initialize(self):
+        """Initialize the service"""
+        logger.info("Audio processing service initialized")
+        return True
+        
     async def process_video_audio(self, video_path: str) -> AudioAnalysisResult:
         """Process audio from video file"""
         try:
