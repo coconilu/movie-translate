@@ -543,22 +543,469 @@ class MediaService:
 class SpeechRecognitionService:
     def __init__(self):
         self.models = {
-            'sense_voice': SenseVoiceModel(),  # 本地模型
-            'baidu': BaiduSpeechService()     # 云端API
+            'sense_voice': SenseVoiceModel(), # 本地SenseVoice模型
+            'baidu': BaiduSpeechService()    # 云端API
         }
     
-    async def transcribe(self, audio_path: str, model: str = 'sense_voice') -> SRTResult:
+    async def transcribe(self, audio_path: str, model: str) -> SRTResult:
         """语音识别转字幕"""
-        # 1. 选择模型
+        # 1. 验证模型选择
+        if model not in self.models:
+            raise ValueError(f"不支持的模型: {model}. 可用模型: {list(self.models.keys())}")
+        
         # 2. 预处理音频
+        processed_audio = await self._preprocess_audio(audio_path)
+        
         # 3. 执行识别
+        result = await self.models[model].transcribe(processed_audio)
+        
         # 4. 生成SRT格式
+        srt_result = await self._generate_srt(result)
+        
         # 5. 保存结果
-        pass
+        await self._save_transcription_result(audio_path, srt_result)
+        
+        return srt_result
     
     async def detect_language(self, audio_path: str) -> str:
         """检测语言"""
-        pass
+        return await self.models['sense_voice'].detect_language(audio_path)
+    
+    def get_available_models(self) -> Dict[str, Dict[str, str]]:
+        """获取可用模型列表"""
+        return {
+            'sense_voice': {
+                'name': 'SenseVoice',
+                'type': 'local',
+                'description': '本地模型，中文优化，支持情感识别',
+                'requires_gpu': True
+            },
+            'baidu': {
+                'name': '百度语音',
+                'type': 'cloud',
+                'description': '云端API，中文优化，支持方言识别',
+                'requires_api_key': True
+            }
+        }
+```
+
+### 4.2.1 SenseVoice模型集成
+```python
+# sense_voice_integration.py
+class SenseVoiceModel:
+    def __init__(self):
+        self.model_name = "SenseVoiceSmall"
+        self.model = None
+        self.processor = None
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model_cache = {}
+        
+    async def load_model(self):
+        """加载SenseVoice模型"""
+        if self.model is None:
+            try:
+                # 从Hugging Face加载SenseVoice模型
+                self.model = AutoModelForSpeechSeq2Seq.from_pretrained(
+                    "FunAudioLLM/SenseVoiceSmall"
+                ).to(self.device)
+                
+                self.processor = AutoProcessor.from_pretrained(
+                    "FunAudioLLM/SenseVoiceSmall"
+                )
+                
+                # 启用半精度以节省显存
+                if self.device == "cuda":
+                    self.model = self.model.half()
+                
+                logger.info("SenseVoice模型加载成功")
+                
+            except Exception as e:
+                logger.error(f"SenseVoice模型加载失败: {e}")
+                raise ModelLoadError(f"SenseVoice模型加载失败: {e}")
+    
+    async def transcribe(self, audio_path: str) -> TranscriptionResult:
+        """SenseVoice语音识别"""
+        await self.load_model()
+        
+        try:
+            # 1. 音频预处理
+            audio_features = await self._preprocess_audio(audio_path)
+            
+            # 2. 生成输入特征
+            input_features = self.processor(
+                audio_features, 
+                sampling_rate=16000, 
+                return_tensors="pt"
+            ).input_features.to(self.device)
+            
+            # 3. 执行识别（支持情感识别）
+            with torch.no_grad():
+                predicted_ids = self.model.generate(
+                    input_features,
+                    language="zh",  # 中文识别
+                    task="transcribe",
+                    temperature=0.0,
+                    beam_size=5,
+                    best_of=5,
+                    patience=1.0,
+                    length_penalty=1.0,
+                    repetition_penalty=1.0,
+                    no_repeat_ngram_size=3,
+                    return_timestamps=True,  # 返回时间戳
+                    return_token_timestamps=True  # 返回词级时间戳
+                )
+            
+            # 4. 解码结果（包含情感信息）
+            transcription = self.processor.batch_decode(
+                predicted_ids, 
+                skip_special_tokens=True
+            )[0]
+            
+            # 5. 后处理
+            cleaned_text = self._postprocess_transcription(transcription)
+            
+            # 6. 情感分析（SenseVoice特有功能）
+            emotion_result = await self._analyze_emotion(audio_features)
+            
+            return TranscriptionResult(
+                text=cleaned_text,
+                language="zh",
+                confidence=0.96,  # SenseVoice中文优化，置信度更高
+                model_used="SenseVoiceSmall",
+                processing_time=time.time(),
+                emotion=emotion_result  # 包含情感信息
+            )
+            
+        except Exception as e:
+            logger.error(f"SenseVoice识别失败: {e}")
+            raise TranscriptionError(f"语音识别失败: {e}")
+    
+    async def _preprocess_audio(self, audio_path: str) -> np.ndarray:
+        """音频预处理"""
+        try:
+            # 1. 读取音频
+            audio, sr = librosa.load(audio_path, sr=16000)
+            
+            # 2. 标准化音频
+            audio = librosa.util.normalize(audio)
+            
+            # 3. 去除静音
+            audio = self._remove_silence(audio)
+            
+            # 4. 音频增强
+            audio = self._enhance_audio(audio)
+            
+            return audio
+            
+        except Exception as e:
+            logger.error(f"音频预处理失败: {e}")
+            raise
+    
+    def _remove_silence(self, audio: np.ndarray) -> np.ndarray:
+        """去除静音"""
+        # 使用librosa去除静音
+        intervals = librosa.effects.split(
+            audio, 
+            top_db=20, 
+            frame_length=2048, 
+            hop_length=512
+        )
+        
+        # 提取非静音片段
+        non_silent_segments = []
+        for start, end in intervals:
+            non_silent_segments.append(audio[start:end])
+        
+        if non_silent_segments:
+            return np.concatenate(non_silent_segments)
+        else:
+            return audio
+    
+    def _enhance_audio(self, audio: np.ndarray) -> np.ndarray:
+        """音频增强"""
+        try:
+            # 1. 降噪
+            if hasattr(self, 'denoiser'):
+                audio = self.denoiser(audio, sr=16000)
+            
+            # 2. 音量标准化
+            audio = librosa.util.normalize(audio)
+            
+            return audio
+            
+        except Exception as e:
+            logger.warning(f"音频增强失败，使用原始音频: {e}")
+            return audio
+    
+    def _postprocess_transcription(self, text: str) -> str:
+        """转录结果后处理"""
+        # 1. 去除多余空格
+        text = re.sub(r'\s+', ' ', text.strip())
+        
+        # 2. 修复标点符号
+        text = self._fix_punctuation(text)
+        
+        # 3. 移除识别错误常见词
+        text = self._remove_common_errors(text)
+        
+        return text
+    
+    def _fix_punctuation(self, text: str) -> str:
+        """修复标点符号"""
+        # 添加中文标点符号
+        punctuation_map = {
+            ',': '，',
+            '.': '。',
+            '?': '？',
+            '!': '！',
+            ':': '：',
+            ';': '；',
+            '"': '"',
+            "'": '"'
+        }
+        
+        for en, zh in punctuation_map.items():
+            text = text.replace(en, zh)
+        
+        return text
+    
+    def _remove_common_errors(self, text: str) -> str:
+        """移除常见识别错误"""
+        # Whisper常见错误词汇映射
+        error_map = {
+            '字幕': '字幕',
+            '感谢观看': '感谢观看',
+            '请点赞': '请点赞',
+            '订阅': '订阅',
+        }
+        
+        # 这里可以根据实际使用情况添加更多错误修正
+        return text
+    
+    async def _analyze_emotion(self, audio_features: np.ndarray) -> Dict[str, float]:
+        """情感分析（SenseVoice特有功能）"""
+        try:
+            # 使用SenseVoice的情感识别能力
+            emotion_features = self.model.extract_emotion_features(audio_features)
+            
+            # 分析情感分布
+            emotions = {
+                "neutral": emotion_features.get("neutral", 0.0),
+                "happy": emotion_features.get("happy", 0.0),
+                "sad": emotion_features.get("sad", 0.0),
+                "angry": emotion_features.get("angry", 0.0),
+                "excited": emotion_features.get("excited", 0.0)
+            }
+            
+            # 归一化情感值
+            total = sum(emotions.values())
+            if total > 0:
+                emotions = {k: v/total for k, v in emotions.items()}
+            
+            return emotions
+            
+        except Exception as e:
+            logger.warning(f"情感分析失败，返回默认值: {e}")
+            return {"neutral": 1.0}
+```
+
+### 4.2.2 SenseVoice性能优化
+```python
+# sense_voice_optimizer.py
+class SenseVoiceOptimizer:
+    def __init__(self):
+        self.model_config = WhisperConfig()
+        self.gpu_manager = GPUMemoryManager()
+        self.batch_processor = BatchProcessor()
+    
+    async def optimize_for_inference(self):
+        """推理性能优化"""
+        if torch.cuda.is_available():
+            # 1. 启用TensorRT加速（如果可用）
+            if self._is_tensorrt_available():
+                await self._enable_tensorrt()
+            
+            # 2. 启用半精度推理
+            self.model = self.model.half()
+            
+            # 3. 启用Flash Attention
+            if hasattr(self.model, 'config'):
+                self.model.config.use_flash_attention = True
+            
+            # 4. 模型量化
+            await self._quantize_model()
+    
+    async def batch_transcribe(self, audio_files: List[str]) -> List[TranscriptionResult]:
+        """批量语音识别"""
+        # 1. 音频文件分组
+        batches = self._group_audio_files(audio_files, batch_size=4)
+        
+        # 2. 并行处理
+        results = []
+        for batch in batches:
+            batch_results = await self._process_batch(batch)
+            results.extend(batch_results)
+        
+        return results
+    
+    async def _process_batch(self, audio_files: List[str]) -> List[TranscriptionResult]:
+        """处理音频批次"""
+        try:
+            # 1. 预处理所有音频
+            audio_features = []
+            for audio_path in audio_files:
+                features = await self._preprocess_audio(audio_path)
+                audio_features.append(features)
+            
+            # 2. 批量生成特征
+            input_features = self.processor(
+                audio_features, 
+                sampling_rate=16000, 
+                return_tensors="pt",
+                padding=True
+            ).input_features.to(self.device)
+            
+            # 3. 批量识别
+            with torch.no_grad():
+                predicted_ids = self.model.generate(
+                    input_features,
+                    language="zh",
+                    task="transcribe",
+                    **self._get_batch_generation_params()
+                )
+            
+            # 4. 批量解码
+            transcriptions = self.processor.batch_decode(
+                predicted_ids, 
+                skip_special_tokens=True
+            )
+            
+            # 5. 处理结果
+            results = []
+            for i, transcription in enumerate(transcriptions):
+                result = TranscriptionResult(
+                    text=self._postprocess_transcription(transcription),
+                    language="zh",
+                    confidence=0.95,
+                    model_used="whisper-large-v3",
+                    audio_file=audio_files[i],
+                    processing_time=time.time()
+                )
+                results.append(result)
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"批量处理失败: {e}")
+            raise
+    
+    def _get_batch_generation_params(self) -> Dict:
+        """获取批量生成参数"""
+        return {
+            "temperature": 0.0,
+            "beam_size": 5,
+            "best_of": 5,
+            "patience": 1.0,
+            "length_penalty": 1.0,
+            "repetition_penalty": 1.0,
+            "no_repeat_ngram_size": 3,
+            "num_beams": 5
+        }
+```
+
+### 4.2.3 SenseVoice缓存管理
+```python
+# sense_voice_cache.py
+class SenseVoiceCacheManager:
+    def __init__(self):
+        self.cache_db = SenseVoiceCacheDB()
+        self.hash_generator = AudioHashGenerator()
+        self.ttl = 86400 * 7  # 7天缓存
+    
+    async def get_cached_transcription(self, audio_path: str) -> Optional[TranscriptionResult]:
+        """获取缓存的转录结果"""
+        try:
+            # 1. 生成音频哈希
+            audio_hash = await self.hash_generator.generate_hash(audio_path)
+            
+            # 2. 查询缓存
+            cached_result = await self.cache_db.get_cache(audio_hash)
+            
+            if cached_result:
+                # 3. 更新访问时间
+                await self.cache_db.update_access_time(audio_hash)
+                
+                return TranscriptionResult(
+                    text=cached_result['text'],
+                    language=cached_result['language'],
+                    confidence=cached_result['confidence'],
+                    model_used=cached_result['model_used'],
+                    is_cached=True,
+                    processing_time=0.0
+                )
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"获取缓存失败: {e}")
+            return None
+    
+    async def save_transcription_cache(self, audio_path: str, result: TranscriptionResult):
+        """保存转录缓存"""
+        try:
+            # 1. 生成音频哈希
+            audio_hash = await self.hash_generator.generate_hash(audio_path)
+            
+            # 2. 保存缓存
+            cache_data = {
+                'audio_hash': audio_hash,
+                'text': result.text,
+                'language': result.language,
+                'confidence': result.confidence,
+                'model_used': result.model_used,
+                'audio_path': audio_path,
+                'created_at': datetime.now(),
+                'expires_at': datetime.now() + timedelta(seconds=self.ttl)
+            }
+            
+            await self.cache_db.save_cache(audio_hash, cache_data)
+            
+        except Exception as e:
+            logger.error(f"保存缓存失败: {e}")
+    
+    async def cleanup_expired_cache(self):
+        """清理过期缓存"""
+        try:
+            expired_count = await self.cache_db.delete_expired_cache()
+            logger.info(f"清理了 {expired_count} 个过期缓存")
+            
+        except Exception as e:
+            logger.error(f"清理缓存失败: {e}")
+```
+
+### 4.2.4 模型选择接口
+```python
+# model_selection.py
+class ModelSelectionService:
+    def __init__(self):
+        self.speech_service = SpeechRecognitionService()
+    
+    def get_speech_recognition_models(self) -> Dict[str, Dict[str, str]]:
+        """获取语音识别可用模型列表"""
+        return self.speech_service.get_available_models()
+    
+    def validate_model_selection(self, model: str, model_type: str) -> bool:
+        """验证模型选择是否有效"""
+        if model_type == "speech_recognition":
+            return model in self.speech_service.get_available_models()
+        return False
+    
+    def get_model_requirements(self, model: str) -> Dict[str, Any]:
+        """获取模型配置要求"""
+        models = self.speech_service.get_available_models()
+        if model in models:
+            return models[model]
+        return {}
 ```
 
 ### 4.3 翻译模块
@@ -844,8 +1291,17 @@ class VoiceCloningService:
         self.quality_analyzer = VoiceQualityAnalyzer()
         self.cache_manager = VoiceCacheManager()
     
-    async def clone_voice(self, character_id: str, audio_samples: List[str]) -> VoiceCloneResult:
-        """克隆声音 - 本地F5-TTS方案"""
+    async def clone_voice(self, character_id: str, audio_samples: List[str], service: str) -> VoiceCloneResult:
+        """克隆声音 - 根据用户选择的服务"""
+        if service == 'f5_tts':
+            return await self._clone_with_local(character_id, audio_samples)
+        elif service == 'minimax':
+            return await self._clone_with_cloud(character_id, audio_samples)
+        else:
+            raise ValueError(f"不支持的声音克隆服务: {service}")
+    
+    async def _clone_with_local(self, character_id: str, audio_samples: List[str]) -> VoiceCloneResult:
+        """使用本地F5-TTS克隆声音"""
         try:
             # 1. 音频预处理
             processed_audio = await self.voice_processor.preprocess_audio(audio_samples)
@@ -883,17 +1339,65 @@ class VoiceCloningService:
             )
             
         except Exception as e:
-            # 本地训练失败，尝试云端方案
-            return await self._fallback_to_cloud_service(character_id, audio_samples)
+            logger.error(f"本地声音克隆失败: {e}")
+            raise VoiceCloningError(f"本地声音克隆失败: {e}")
     
-    async def synthesize(self, text: str, character_id: str, use_cloud: bool = False) -> str:
-        """语音合成 - 本地/云端混合方案"""
-        if use_cloud:
-            # 使用MiniMax Audio API
+    async def _clone_with_cloud(self, character_id: str, audio_samples: List[str]) -> VoiceCloneResult:
+        """使用云端MiniMax克隆声音"""
+        try:
+            # 1. 音频预处理
+            processed_audio = await self.voice_processor.preprocess_audio(audio_samples)
+            
+            # 2. 音质评估
+            quality_result = await self.quality_analyzer.analyze_audio_quality(processed_audio)
+            if not quality_result.is_suitable:
+                raise VoiceQualityError(f"音频质量不达标: {quality_result.reason}")
+            
+            # 3. 调用MiniMax API
+            minimax_service = self.cloud_services['minimax']
+            result = await minimax_service.voice_clone(processed_audio, character_id)
+            
+            return VoiceCloneResult(
+                character_id=character_id,
+                model_path=result.model_path,
+                quality_score=result.quality_score,
+                training_time=result.training_time,
+                is_cloud=True
+            )
+            
+        except Exception as e:
+            logger.error(f"云端声音克隆失败: {e}")
+            raise VoiceCloningError(f"云端声音克隆失败: {e}")
+    
+    async def synthesize(self, text: str, character_id: str, service: str) -> str:
+        """语音合成 - 根据选择的服务"""
+        if service == 'f5_tts':
+            return await self._synthesize_with_local(text, character_id)
+        elif service == 'minimax':
             return await self._synthesize_with_cloud(text, character_id)
         else:
-            # 使用本地F5-TTS模型
-            return await self._synthesize_with_local(text, character_id)
+            raise ValueError(f"不支持的声音合成服务: {service}")
+    
+    def get_available_services(self) -> Dict[str, Dict[str, str]]:
+        """获取可用声音克隆服务"""
+        return {
+            'f5_tts': {
+                'name': 'F5-TTS',
+                'type': 'local',
+                'description': '本地零样本声音克隆，无需大量训练数据',
+                'requires_gpu': True,
+                'training_time': '5-10分钟',
+                'quality': '高'
+            },
+            'minimax': {
+                'name': 'MiniMax Audio',
+                'type': 'cloud',
+                'description': '云端企业级声音克隆服务，质量稳定',
+                'requires_api_key': True,
+                'training_time': '1-3分钟',
+                'quality': '专业级'
+            }
+        }
     
     async def _train_f5_tts_model(self, character_id: str, audio_samples: List[str]) -> str:
         """使用F5-TTS训练声音模型"""
@@ -1337,59 +1841,40 @@ class MiniMaxFallbackStrategy:
             raise
 ```
 
-### 5.3 混合方案策略
+### 5.3 用户选择策略
 
-#### 5.3.1 智能路由策略
+#### 5.3.1 服务选择接口
 ```python
-# voice_routing.py
-class VoiceRoutingStrategy:
+# service_selection.py
+class VoiceCloningSelectionService:
     def __init__(self):
-        self.local_service = VoiceCloningService()
-        self.cloud_service = MiniMaxAudioService()
-        self.quality_threshold = 0.8
-        self.performance_monitor = PerformanceMonitor()
+        self.voice_service = VoiceCloningService()
     
-    async def route_voice_clone(self, character_id: str, audio_samples: List[str]) -> VoiceCloneResult:
-        """智能路由声音克隆请求"""
-        try:
-            # 1. 评估系统资源
-            system_status = await self.performance_monitor.get_system_status()
-            
-            # 2. 评估音频质量
-            audio_quality = await self._evaluate_audio_quality(audio_samples)
-            
-            # 3. 决策路由
-            if self._should_use_local(system_status, audio_quality):
-                logger.info("使用本地F5-TTS进行声音克隆")
-                return await self.local_service.clone_voice(character_id, audio_samples)
-            else:
-                logger.info("使用云端MiniMax进行声音克隆")
-                return await self.cloud_service.voice_clone(audio_samples, character_id)
-                
-        except Exception as e:
-            logger.error(f"路由决策失败: {e}")
-            # 默认使用云端方案
-            return await self.cloud_service.voice_clone(audio_samples, character_id)
+    def get_available_services(self) -> Dict[str, Dict[str, str]]:
+        """获取可用声音克隆服务"""
+        return self.voice_service.get_available_services()
     
-    def _should_use_local(self, system_status: SystemStatus, audio_quality: AudioQuality) -> bool:
-        """决定是否使用本地方案"""
-        # 1. 检查GPU可用性
-        if not system_status.gpu_available:
-            return False
-        
-        # 2. 检查显存
-        if system_status.gpu_memory_mb < 8000:  # 至少8GB显存
-            return False
-        
-        # 3. 检查音频质量
-        if audio_quality.score < self.quality_threshold:
-            return False
-        
-        # 4. 检查系统负载
-        if system_status.cpu_usage > 80:
-            return False
-        
-        return True
+    def validate_service_selection(self, service: str) -> bool:
+        """验证服务选择是否有效"""
+        return service in self.voice_service.get_available_services()
+    
+    def get_service_requirements(self, service: str) -> Dict[str, Any]:
+        """获取服务配置要求"""
+        services = self.voice_service.get_available_services()
+        if service in services:
+            return services[service]
+        return {}
+    
+    async def recommend_service(self, user_preferences: Dict[str, Any]) -> str:
+        """根据用户偏好推荐服务（可选）"""
+        # 根据用户硬件配置、网络状况、质量要求等给出建议
+        if user_preferences.get('prefer_local', False):
+            return 'f5_tts'
+        elif user_preferences.get('prefer_cloud', False):
+            return 'minimax'
+        else:
+            # 默认推荐本地方案
+            return 'f5_tts'
 ```
 
 #### 5.3.2 质量评估和对比
@@ -2033,22 +2518,1464 @@ if __name__ == "__main__":
 - **日志审计**：完整的操作日志
 - **漏洞扫描**：定期安全扫描
 
-## 10. 监控和运维
+## 10. 成本控制模块
 
-### 10.1 监控指标
+### 10.1 成本监控架构
+```python
+# cost_control.py
+class CostControlManager:
+    def __init__(self):
+        self.budget_manager = BudgetManager()
+        self.usage_tracker = UsageTracker()
+        self.cost_analyzer = CostAnalyzer()
+        self.alert_manager = AlertManager()
+        self.fallback_manager = FallbackManager()
+    
+    async def monitor_api_usage(self):
+        """监控API使用情况"""
+        # 1. 实时监控各API使用量
+        # 2. 计算成本
+        # 3. 检查预算
+        # 4. 触发预警
+        pass
+    
+    async def get_cost_report(self) -> CostReport:
+        """获取成本报告"""
+        return await self.cost_analyzer.generate_report()
+```
+
+### 10.2 API配额管理
+```python
+# quota_manager.py
+class APIQuotaManager:
+    def __init__(self):
+        self.quotas = {
+            'azure_speech': {
+                'monthly_limit': 5000,  # 分钟
+                'used': 0,
+                'cost_per_minute': 0.013,  # $0.8/60分钟
+                'reset_date': self._get_next_month_reset()
+            },
+            'google_speech': {
+                'monthly_limit': 60,  # 分钟
+                'used': 0,
+                'cost_per_minute': 0.01,  # $0.6/分钟
+                'reset_date': self._get_next_month_reset()
+            },
+            'baidu_speech': {
+                'daily_limit': 500,  # 次
+                'used': 0,
+                'cost_per_call': 0.01,
+                'reset_date': self._get_next_day_reset()
+            },
+            'deepseek': {
+                'monthly_limit': 1000000,  # 字
+                'used': 0,
+                'cost_per_1k_chars': 0.002,
+                'reset_date': self._get_next_month_reset()
+            },
+            'glm': {
+                'monthly_limit': 500000,  # 字
+                'used': 0,
+                'cost_per_1k_chars': 0.003,
+                'reset_date': self._get_next_month_reset()
+            },
+            'minimax': {
+                'monthly_limit': 1000,  # 次
+                'used': 0,
+                'cost_per_call': 0.05,
+                'reset_date': self._get_next_month_reset()
+            }
+        }
+    
+    async def check_quota(self, service: str, requested_units: int) -> QuotaCheckResult:
+        """检查配额"""
+        quota = self.quotas.get(service)
+        if not quota:
+            return QuotaCheckResult(allowed=True, reason="Service not configured")
+        
+        remaining = quota['monthly_limit'] - quota['used']
+        if remaining >= requested_units:
+            return QuotaCheckResult(allowed=True, remaining=remaining)
+        else:
+            return QuotaCheckResult(
+                allowed=False, 
+                reason="Quota exceeded",
+                remaining=remaining,
+                suggested_alternative=self._get_alternative_service(service)
+            )
+    
+    async def record_usage(self, service: str, units: int):
+        """记录使用量"""
+        if service in self.quotas:
+            self.quotas[service]['used'] += units
+            await self._save_usage_to_db(service, units)
+            
+            # 检查是否需要预警
+            await self._check_quota_alert(service)
+    
+    def get_quota_status(self) -> Dict[str, QuotaStatus]:
+        """获取配额状态"""
+        status = {}
+        for service, quota in self.quotas.items():
+            usage_percent = (quota['used'] / quota['monthly_limit']) * 100
+            estimated_cost = quota['used'] * quota['cost_per_unit']
+            
+            status[service] = QuotaStatus(
+                service=service,
+                used=quota['used'],
+                limit=quota['monthly_limit'],
+                usage_percent=usage_percent,
+                estimated_cost=estimated_cost,
+                days_until_reset=self._days_until_reset(quota['reset_date'])
+            )
+        
+        return status
+    
+    async def _check_quota_alert(self, service: str):
+        """检查配额预警"""
+        quota = self.quotas[service]
+        usage_percent = (quota['used'] / quota['monthly_limit']) * 100
+        
+        # 80%预警
+        if usage_percent >= 80:
+            await self.alert_manager.send_quota_alert(
+                service=service,
+                usage_percent=usage_percent,
+                remaining=quota['monthly_limit'] - quota['used']
+            )
+        
+        # 100%预警
+        if usage_percent >= 100:
+            await self.alert_manager.send_quota_exceeded_alert(service)
+```
+
+### 10.3 预算管理
+```python
+# budget_manager.py
+class BudgetManager:
+    def __init__(self):
+        self.monthly_budget = 50.0  # 默认月度预算$50
+        self.alert_thresholds = [0.8, 0.9, 1.0]  # 预警阈值
+        self.cost_tracker = CostTracker()
+    
+    async def set_monthly_budget(self, amount: float):
+        """设置月度预算"""
+        self.monthly_budget = amount
+        await self._save_budget_to_db(amount)
+    
+    async def check_budget_status(self) -> BudgetStatus:
+        """检查预算状态"""
+        # 1. 获取本月已使用金额
+        used_amount = await self.cost_tracker.get_monthly_cost()
+        
+        # 2. 计算使用百分比
+        usage_percent = (used_amount / self.monthly_budget) * 100
+        
+        # 3. 计算剩余预算
+        remaining = self.monthly_budget - used_amount
+        
+        # 4. 检查是否需要预警
+        alert_level = None
+        for threshold in self.alert_thresholds:
+            if usage_percent >= threshold * 100:
+                alert_level = threshold
+        
+        return BudgetStatus(
+            monthly_budget=self.monthly_budget,
+            used_amount=used_amount,
+            usage_percent=usage_percent,
+            remaining=remaining,
+            alert_level=alert_level,
+            days_until_month_end=self._days_until_month_end()
+        )
+    
+    async def enforce_budget_limits(self, service: str, estimated_cost: float) -> bool:
+        """执行预算限制"""
+        budget_status = await self.check_budget_status()
+        
+        # 如果预算已超限，拒绝使用付费服务
+        if budget_status.usage_percent >= 100:
+            logger.warning(f"预算已超限，拒绝使用付费服务: {service}")
+            return False
+        
+        # 如果即将超限，检查是否可以使用免费替代方案
+        if budget_status.usage_percent >= 90:
+            has_free_alternative = await self._has_free_alternative(service)
+            if has_free_alternative:
+                logger.info(f"即将超限，切换到免费替代方案: {service}")
+                return True
+            else:
+                logger.warning(f"即将超限且无免费替代方案，拒绝使用: {service}")
+                return False
+        
+        return True
+```
+
+### 10.4 智能成本优化
+```python
+# cost_optimizer.py
+class CostOptimizer:
+    def __init__(self):
+        self.quota_manager = APIQuotaManager()
+        self.budget_manager = BudgetManager()
+        self.performance_analyzer = PerformanceAnalyzer()
+    
+    async def optimize_service_selection(self, task_type: str, requirements: Dict) -> ServiceSelection:
+        """优化服务选择以控制成本"""
+        try:
+            # 1. 获取可用的服务选项
+            available_services = self._get_available_services(task_type)
+            
+            # 2. 过滤出预算范围内的服务
+            affordable_services = []
+            for service in available_services:
+                if await self._is_service_affordable(service, requirements):
+                    affordable_services.append(service)
+            
+            # 3. 根据成本效益比排序
+            ranked_services = await self._rank_services_by_cost_effectiveness(
+                affordable_services, requirements
+            )
+            
+            # 4. 选择最优服务
+            selected_service = ranked_services[0] if ranked_services else available_services[0]
+            
+            return ServiceSelection(
+                service=selected_service,
+                reason=self._get_selection_reason(selected_service, ranked_services),
+                estimated_cost=await self._estimate_cost(selected_service, requirements),
+                fallback_options=ranked_services[1:3] if len(ranked_services) > 1 else []
+            )
+            
+        except Exception as e:
+            logger.error(f"服务选择优化失败: {e}")
+            return ServiceSelection(
+                service=available_services[0],
+                reason="优化失败，使用默认服务",
+                estimated_cost=0
+            )
+    
+    async def _is_service_affordable(self, service: ServiceInfo, requirements: Dict) -> bool:
+        """检查服务是否在预算范围内"""
+        # 1. 检查配额
+        quota_check = await self.quota_manager.check_quota(
+            service.name, requirements.get('units', 1)
+        )
+        
+        if not quota_check.allowed:
+            return False
+        
+        # 2. 检查预算
+        estimated_cost = await self._estimate_service_cost(service, requirements)
+        budget_ok = await self.budget_manager.enforce_budget_limits(
+            service.name, estimated_cost
+        )
+        
+        return quota_check.allowed and budget_ok
+    
+    async def _rank_services_by_cost_effectiveness(self, services: List[ServiceInfo], 
+                                                  requirements: Dict) -> List[ServiceInfo]:
+        """根据成本效益比排序服务"""
+        scored_services = []
+        
+        for service in services:
+            # 1. 计算成本分数
+            cost_score = await self._calculate_cost_score(service, requirements)
+            
+            # 2. 计算质量分数
+            quality_score = service.quality_score
+            
+            # 3. 计算成本效益比
+            cost_effectiveness = quality_score / cost_score if cost_score > 0 else 0
+            
+            scored_services.append({
+                'service': service,
+                'score': cost_effectiveness,
+                'cost_score': cost_score,
+                'quality_score': quality_score
+            })
+        
+        # 按分数降序排序
+        scored_services.sort(key=lambda x: x['score'], reverse=True)
+        
+        return [item['service'] for item in scored_services]
+```
+
+### 10.5 成本分析和报告
+```python
+# cost_analyzer.py
+class CostAnalyzer:
+    def __init__(self):
+        self.usage_db = UsageDatabase()
+        self.cost_calculator = CostCalculator()
+    
+    async def generate_cost_report(self, period: str = 'monthly') -> CostReport:
+        """生成成本报告"""
+        try:
+            # 1. 获取使用数据
+            usage_data = await self.usage_db.get_usage_data(period)
+            
+            # 2. 计算各项成本
+            cost_breakdown = await self._calculate_cost_breakdown(usage_data)
+            
+            # 3. 分析趋势
+            cost_trends = await self._analyze_cost_trends(usage_data)
+            
+            # 4. 生成优化建议
+            recommendations = await self._generate_cost_recommendations(
+                cost_breakdown, cost_trends
+            )
+            
+            return CostReport(
+                period=period,
+                total_cost=sum(item.cost for item in cost_breakdown),
+                breakdown=cost_breakdown,
+                trends=cost_trends,
+                recommendations=recommendations,
+                generated_at=datetime.now()
+            )
+            
+        except Exception as e:
+            logger.error(f"生成成本报告失败: {e}")
+            raise
+    
+    async def _calculate_cost_breakdown(self, usage_data: List[UsageRecord]) -> List[CostItem]:
+        """计算成本明细"""
+        breakdown = []
+        
+        # 按服务分组
+        service_usage = {}
+        for record in usage_data:
+            if record.service not in service_usage:
+                service_usage[record.service] = []
+            service_usage[record.service].append(record)
+        
+        # 计算每个服务的成本
+        for service, records in service_usage.items():
+            total_units = sum(record.units for record in records)
+            cost = await self.cost_calculator.calculate_service_cost(
+                service, total_units
+            )
+            
+            breakdown.append(CostItem(
+                service=service,
+                units=total_units,
+                cost=cost,
+                percentage=0  # 将在后面计算百分比
+            ))
+        
+        # 计算百分比
+        total_cost = sum(item.cost for item in breakdown)
+        for item in breakdown:
+            item.percentage = (item.cost / total_cost) * 100 if total_cost > 0 else 0
+        
+        return breakdown
+    
+    async def _generate_cost_recommendations(self, breakdown: List[CostItem], 
+                                          trends: CostTrends) -> List[str]:
+        """生成成本优化建议"""
+        recommendations = []
+        
+        # 1. 识别高成本服务
+        high_cost_services = [item for item in breakdown if item.percentage > 30]
+        if high_cost_services:
+            recommendations.append(
+                f"高成本服务建议: {', '.join(s.service for s in high_cost_services)} "
+                f"占总成本的{sum(s.percentage for s in high_cost_services):.1f}%，建议优化使用频率或寻找替代方案"
+            )
+        
+        # 2. 分析趋势
+        if trends.growth_rate > 20:
+            recommendations.append(
+                f"成本增长较快(月增长率{trends.growth_rate:.1f}%)，建议设置更严格的预算控制"
+            )
+        
+        # 3. 预算建议
+        if trends.predicted_next_month > trends.current_month * 1.1:
+            recommendations.append(
+                f"预测下月成本为${trends.predicted_next_month:.2f}，建议增加预算或优化使用策略"
+            )
+        
+        return recommendations
+```
+
+## 11. 监控和运维
+
+### 11.1 监控指标
 - **系统指标**：CPU、内存、磁盘、网络
 - **应用指标**：API响应时间、错误率、处理队列长度
 - **业务指标**：处理任务数、成功率、平均处理时间
 - **自定义指标**：模型准确率、资源使用率
+- **成本指标**：API使用量、预算使用率、成本趋势
 
-### 10.2 日志管理
+### 11.2 日志管理
 - **结构化日志**：JSON格式的结构化日志
 - **日志级别**：DEBUG、INFO、WARNING、ERROR
 - **日志聚合**：集中化日志收集和分析
 - **日志轮转**：定期归档和清理
 
-### 10.3 告警机制
+### 11.3 告警机制
 - **阈值告警**：基于指标阈值的告警
 - **异常检测**：基于机器学习的异常检测
 - **告警通知**：邮件、短信、企业微信等多渠道通知
 - **故障自愈**：自动化的故障恢复机制
+
+### 11.4 成本告警
+- **配额预警**：API配额使用达到80%时预警
+- **预算预警**：月度预算使用达到80%、90%、100%时预警
+- **异常成本预警**：单日成本异常突增时预警
+- **成本优化建议**：定期发送成本优化建议
+
+## 12. 数据迁移方案
+
+### 12.1 版本升级数据迁移
+```python
+# data_migration.py
+class DataMigrationManager:
+    def __init__(self):
+        self.db_manager = DatabaseManager()
+        self.backup_manager = BackupManager()
+        self.version_manager = VersionManager()
+        self.validator = DataValidator()
+    
+    async def migrate_to_version(self, target_version: str) -> MigrationResult:
+        """迁移到指定版本"""
+        try:
+            # 1. 检查当前版本
+            current_version = await self.version_manager.get_current_version()
+            
+            # 2. 创建备份
+            backup_path = await self.backup_manager.create_full_backup()
+            
+            # 3. 执行迁移
+            migration_steps = self._get_migration_steps(current_version, target_version)
+            
+            for step in migration_steps:
+                await self._execute_migration_step(step)
+            
+            # 4. 更新版本号
+            await self.version_manager.update_version(target_version)
+            
+            # 5. 验证数据完整性
+            validation_result = await self.validator.validate_data_integrity()
+            
+            return MigrationResult(
+                success=True,
+                target_version=target_version,
+                backup_path=backup_path,
+                validation_result=validation_result,
+                migration_time=datetime.now()
+            )
+            
+        except Exception as e:
+            # 迁移失败，恢复备份
+            await self._restore_from_backup(backup_path)
+            raise MigrationError(f"迁移失败: {e}")
+    
+    async def _execute_migration_step(self, step: MigrationStep):
+        """执行迁移步骤"""
+        logger.info(f"执行迁移步骤: {step.description}")
+        
+        if step.type == 'schema_change':
+            await self._migrate_schema(step)
+        elif step.type == 'data_transformation':
+            await self._transform_data(step)
+        elif step.type == 'index_creation':
+            await self._create_indexes(step)
+        elif step.type == 'data_cleanup':
+            await self._cleanup_data(step)
+```
+
+### 12.2 数据库架构迁移
+```python
+# schema_migration.py
+class SchemaMigration:
+    def __init__(self):
+        self.db = DatabaseConnection()
+    
+    async def migrate_from_v1_to_v2(self):
+        """从v1迁移到v2"""
+        # v1 -> v2 的变更：添加声音克隆相关表
+        migration_sql = """
+        -- 添加声音克隆任务表
+        CREATE TABLE IF NOT EXISTS voice_clone_tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            character_id INTEGER REFERENCES characters(id),
+            task_id VARCHAR(64) UNIQUE NOT NULL,
+            status VARCHAR(20) DEFAULT 'pending',
+            clone_method VARCHAR(20),
+            audio_samples TEXT,
+            model_path VARCHAR(500),
+            cloud_voice_id VARCHAR(100),
+            quality_score REAL,
+            error_message TEXT,
+            training_time REAL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP
+        );
+        
+        -- 添加声音合成任务表
+        CREATE TABLE IF NOT EXISTS voice_synthesis_tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            character_id INTEGER REFERENCES characters(id),
+            subtitle_id INTEGER REFERENCES subtitles(id),
+            task_id VARCHAR(64) UNIQUE NOT NULL,
+            status VARCHAR(20) DEFAULT 'pending',
+            synthesis_method VARCHAR(20),
+            text TEXT NOT NULL,
+            output_path VARCHAR(500),
+            duration REAL,
+            quality_score REAL,
+            error_message TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP
+        );
+        
+        -- 更新characters表，添加声音克隆相关字段
+        ALTER TABLE characters ADD COLUMN model_path VARCHAR(500);
+        ALTER TABLE characters ADD COLUMN cloud_voice_id VARCHAR(100);
+        ALTER TABLE characters ADD COLUMN clone_quality_score REAL;
+        ALTER TABLE characters ADD COLUMN clone_method VARCHAR(20);
+        ALTER TABLE characters ADD COLUMN is_cloud_based BOOLEAN DEFAULT FALSE;
+        """
+        
+        await self.db.execute_migration(migration_sql)
+    
+    async def migrate_from_v2_to_v3(self):
+        """从v2迁移到v3"""
+        # v2 -> v3 的变更：添加翻译缓存和成本控制
+        migration_sql = """
+        -- 添加翻译缓存表
+        CREATE TABLE IF NOT EXISTS translation_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text_hash VARCHAR(64) NOT NULL,
+            original_text TEXT NOT NULL,
+            translated_text TEXT NOT NULL,
+            source_lang VARCHAR(10) NOT NULL,
+            target_lang VARCHAR(10) NOT NULL,
+            model_used VARCHAR(50),
+            quality_score REAL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            access_count INTEGER DEFAULT 0,
+            UNIQUE(text_hash, source_lang, target_lang)
+        );
+        
+        -- 添加API使用记录表
+        CREATE TABLE IF NOT EXISTS api_usage_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            service_name VARCHAR(50) NOT NULL,
+            api_endpoint VARCHAR(100) NOT NULL,
+            units_used INTEGER NOT NULL,
+            cost_per_unit REAL NOT NULL,
+            total_cost REAL NOT NULL,
+            request_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            task_id VARCHAR(64),
+            user_id VARCHAR(100)
+        );
+        
+        -- 添加预算配置表
+        CREATE TABLE IF NOT EXISTS budget_config (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            monthly_budget REAL NOT NULL,
+            alert_threshold_1 REAL DEFAULT 0.8,
+            alert_threshold_2 REAL DEFAULT 0.9,
+            alert_threshold_3 REAL DEFAULT 1.0,
+            currency VARCHAR(10) DEFAULT 'USD',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+        
+        await self.db.execute_migration(migration_sql)
+```
+
+### 12.3 配置文件迁移
+```python
+# config_migration.py
+class ConfigMigration:
+    def __init__(self):
+        self.config_path = "config/"
+        self.backup_path = "config/backup/"
+    
+    async def migrate_config_to_v2(self):
+        """迁移配置文件到v2版本"""
+        try:
+            # 1. 备份现有配置
+            await self._backup_config_files()
+            
+            # 2. 迁移主配置文件
+            await self._migrate_main_config()
+            
+            # 3. 迁移模型配置
+            await self._migrate_model_config()
+            
+            # 4. 迁移API配置
+            await self._migrate_api_config()
+            
+            # 5. 验证配置完整性
+            await self._validate_config_migration()
+            
+        except Exception as e:
+            await self._restore_config_backup()
+            raise ConfigMigrationError(f"配置迁移失败: {e}")
+    
+    async def _migrate_main_config(self):
+        """迁移主配置文件"""
+        old_config = await self._load_config("config.yaml")
+        
+        # 转换为新格式
+        new_config = {
+            'version': '2.0',
+            'app': {
+                'name': old_config.get('app_name', 'Movie Translator'),
+                'version': old_config.get('version', '2.0.0'),
+                'debug': old_config.get('debug', False)
+            },
+            'database': {
+                'type': 'sqlite',
+                'path': old_config.get('database_path', 'data/movie_translate.db')
+            },
+            'cache': {
+                'enabled': True,
+                'max_size_mb': old_config.get('cache_size', 1024),
+                'ttl_days': 30
+            },
+            'features': {
+                'voice_cloning': {
+                    'enabled': True,
+                    'local_model': 'f5_tts',
+                    'cloud_service': 'minimax'
+                },
+                'cost_control': {
+                    'enabled': True,
+                    'monthly_budget': 50.0
+                }
+            }
+        }
+        
+        await self._save_config("config_v2.yaml", new_config)
+```
+
+### 12.4 缓存数据迁移
+```python
+# cache_migration.py
+class CacheMigration:
+    def __init__(self):
+        self.old_cache_dir = "cache/"
+        self.new_cache_dir = "cache/v2/"
+        self.cache_mapper = CacheMapper()
+    
+    async def migrate_cache_data(self):
+        """迁移缓存数据"""
+        try:
+            # 1. 扫描旧缓存目录
+            old_cache_files = await self._scan_old_cache()
+            
+            # 2. 转换缓存格式
+            for cache_file in old_cache_files:
+                await self._migrate_cache_file(cache_file)
+            
+            # 3. 更新缓存索引
+            await self._update_cache_index()
+            
+            # 4. 清理旧缓存
+            await self._cleanup_old_cache()
+            
+        except Exception as e:
+            logger.error(f"缓存迁移失败: {e}")
+            raise
+    
+    async def _migrate_cache_file(self, old_file: str):
+        """迁移单个缓存文件"""
+        try:
+            # 1. 读取旧缓存数据
+            old_data = await self._read_old_cache(old_file)
+            
+            # 2. 转换数据格式
+            new_data = await self.cache_mapper.map_cache_data(old_data)
+            
+            # 3. 保存到新位置
+            new_file_path = self._get_new_cache_path(old_file)
+            await self._save_new_cache(new_file_path, new_data)
+            
+            # 4. 更新缓存映射表
+            await self._update_cache_mapping(old_file, new_file_path)
+            
+        except Exception as e:
+            logger.warning(f"缓存文件迁移失败: {old_file}, 错误: {e}")
+```
+
+### 12.5 模型文件迁移
+```python
+# model_migration.py
+class ModelMigration:
+    def __init__(self):
+        self.old_model_dir = "models/"
+        self.new_model_dir = "models/v2/"
+        self.model_downloader = ModelDownloader()
+    
+    async def migrate_models(self):
+        """迁移模型文件"""
+        try:
+            # 1. 检查现有模型
+            existing_models = await self._check_existing_models()
+            
+            # 2. 下载新模型
+            for model_info in existing_models:
+                if model_info['needs_update']:
+                    await self._download_updated_model(model_info)
+            
+            # 3. 迁移自定义模型
+            await self._migrate_custom_models()
+            
+            # 4. 清理旧模型
+            await self._cleanup_old_models()
+            
+        except Exception as e:
+            logger.error(f"模型迁移失败: {e}")
+            raise
+    
+    async def _download_updated_model(self, model_info: Dict):
+        """下载更新的模型"""
+        model_name = model_info['name']
+        version = model_info['new_version']
+        
+        logger.info(f"下载更新模型: {model_name} v{version}")
+        
+        # 创建下载目录
+        download_dir = os.path.join(self.new_model_dir, model_name, version)
+        os.makedirs(download_dir, exist_ok=True)
+        
+        # 下载模型文件
+        await self.model_downloader.download_model(
+            model_name=model_name,
+            version=version,
+            target_dir=download_dir
+        )
+        
+        # 验证模型完整性
+        await self._verify_model_integrity(model_name, version)
+```
+
+### 12.6 迁移验证和回滚
+```python
+# migration_validator.py
+class MigrationValidator:
+    def __init__(self):
+        self.db_validator = DatabaseValidator()
+        self.config_validator = ConfigValidator()
+        self.cache_validator = CacheValidator()
+    
+    async def validate_migration(self, migration_result: MigrationResult) -> ValidationResult:
+        """验证迁移结果"""
+        try:
+            # 1. 验证数据库架构
+            db_validation = await self.db_validator.validate_schema()
+            
+            # 2. 验证配置文件
+            config_validation = await self.config_validator.validate_config()
+            
+            # 3. 验证缓存数据
+            cache_validation = await self.cache_validator.validate_cache()
+            
+            # 4. 验证数据完整性
+            data_integrity = await self._validate_data_integrity()
+            
+            # 5. 运行基本功能测试
+            functionality_test = await self._run_functionality_tests()
+            
+            return ValidationResult(
+                database_validation=db_validation,
+                config_validation=config_validation,
+                cache_validation=cache_validation,
+                data_integrity=data_integrity,
+                functionality_test=functionality_test,
+                overall_success=all([
+                    db_validation.success,
+                    config_validation.success,
+                    cache_validation.success,
+                    data_integrity.success,
+                    functionality_test.success
+                ])
+            )
+            
+        except Exception as e:
+            logger.error(f"迁移验证失败: {e}")
+            return ValidationResult(overall_success=False, error=str(e))
+    
+    async def rollback_migration(self, migration_result: MigrationResult):
+        """回滚迁移"""
+        try:
+            logger.info("开始回滚迁移...")
+            
+            # 1. 恢复数据库备份
+            await self._restore_database_backup(migration_result.backup_path)
+            
+            # 2. 恢复配置文件
+            await self._restore_config_backup()
+            
+            # 3. 恢复缓存数据
+            await self._restore_cache_backup()
+            
+            # 4. 恢复模型文件
+            await self._restore_model_backup()
+            
+            # 5. 重置版本号
+            await self._reset_version_number()
+            
+            logger.info("迁移回滚完成")
+            
+        except Exception as e:
+            logger.error(f"迁移回滚失败: {e}")
+            raise RollbackError(f"回滚失败: {e}")
+```
+
+### 12.7 自动化迁移脚本
+```python
+# auto_migrate.py
+class AutoMigrator:
+    def __init__(self):
+        self.migration_manager = DataMigrationManager()
+        self.validator = MigrationValidator()
+        self.notifier = MigrationNotifier()
+    
+    async def auto_migrate_to_latest(self):
+        """自动迁移到最新版本"""
+        try:
+            # 1. 检查是否有新版本
+            latest_version = await self._get_latest_version()
+            current_version = await self._get_current_version()
+            
+            if current_version == latest_version:
+                logger.info("当前已是最新版本，无需迁移")
+                return
+            
+            # 2. 发送迁移开始通知
+            await self.notifier.send_migration_start_notification(
+                current_version, latest_version
+            )
+            
+            # 3. 执行迁移
+            migration_result = await self.migration_manager.migrate_to_version(
+                latest_version
+            )
+            
+            # 4. 验证迁移结果
+            validation_result = await self.validator.validate_migration(
+                migration_result
+            )
+            
+            if validation_result.overall_success:
+                # 5. 发送迁移成功通知
+                await self.notifier.send_migration_success_notification(
+                    migration_result, validation_result
+                )
+                logger.info("迁移成功完成")
+            else:
+                # 6. 验证失败，执行回滚
+                await self.validator.rollback_migration(migration_result)
+                await self.notifier.send_migration_failure_notification(
+                    migration_result, validation_result
+                )
+                raise MigrationError("迁移验证失败，已回滚")
+                
+        except Exception as e:
+            await self.notifier.send_migration_error_notification(str(e))
+            raise
+
+## 13. 测试方案
+
+### 13.1 测试架构设计
+```python
+# test_architecture.py
+class TestArchitecture:
+    def __init__(self):
+        self.test_runner = TestRunner()
+        self.test_data_manager = TestDataManager()
+        self.test_environment = TestEnvironment()
+        self.test_reporter = TestReporter()
+    
+    async def run_full_test_suite(self) -> TestReport:
+        """运行完整测试套件"""
+        try:
+            # 1. 准备测试环境
+            await self.test_environment.setup()
+            
+            # 2. 加载测试数据
+            await self.test_data_manager.load_test_data()
+            
+            # 3. 运行单元测试
+            unit_results = await self.test_runner.run_unit_tests()
+            
+            # 4. 运行集成测试
+            integration_results = await self.test_runner.run_integration_tests()
+            
+            # 5. 运行端到端测试
+            e2e_results = await self.test_runner.run_e2e_tests()
+            
+            # 6. 运行性能测试
+            performance_results = await self.test_runner.run_performance_tests()
+            
+            # 7. 生成测试报告
+            test_report = await self.test_reporter.generate_report({
+                'unit': unit_results,
+                'integration': integration_results,
+                'e2e': e2e_results,
+                'performance': performance_results
+            })
+            
+            return test_report
+            
+        except Exception as e:
+            logger.error(f"测试套件运行失败: {e}")
+            raise
+        
+        finally:
+            # 清理测试环境
+            await self.test_environment.cleanup()
+```
+
+### 13.2 单元测试方案
+```python
+# test_unit.py
+class UnitTests:
+    def __init__(self):
+        self.test_cases = [
+            'test_audio_processing',
+            'test_speech_recognition',
+            'test_translation_service',
+            'test_character_recognition',
+            'test_voice_cloning',
+            'test_cache_management',
+            'test_cost_control'
+        ]
+    
+    async def test_audio_processing(self):
+        """测试音频处理模块"""
+        test_cases = [
+            ('test_audio_extraction', self._test_audio_extraction),
+            ('test_audio_format_conversion', self._test_audio_format_conversion),
+            ('test_audio_quality_detection', self._test_audio_quality_detection),
+            ('test_audio_enhancement', self._test_audio_enhancement)
+        ]
+        
+        results = []
+        for test_name, test_func in test_cases:
+            try:
+                result = await test_func()
+                results.append(TestResult(test_name, success=True))
+            except Exception as e:
+                results.append(TestResult(test_name, success=False, error=str(e)))
+        
+        return results
+    
+    async def test_speech_recognition(self):
+        """测试语音识别模块"""
+        test_cases = [
+            ('test_whisper_transcription', self._test_whisper_transcription),
+            ('test_sense_voice_transcription', self._test_sense_voice_transcription),
+            ('test_model_routing', self._test_model_routing),
+            ('test_cache_hit', self._test_cache_hit),
+            ('test_error_handling', self._test_error_handling)
+        ]
+        
+        results = []
+        for test_name, test_func in test_cases:
+            try:
+                result = await test_func()
+                results.append(TestResult(test_name, success=True))
+            except Exception as e:
+                results.append(TestResult(test_name, success=False, error=str(e)))
+        
+        return results
+    
+    async def _test_sense_voice_transcription(self):
+        """测试SenseVoice转录功能"""
+        # 1. 准备测试音频
+        test_audio = self.test_data_manager.get_test_audio("chinese_speech.wav")
+        
+        # 2. 执行转录
+        sense_voice_service = SenseVoiceService()
+        result = await sense_voice_service.transcribe(test_audio)
+        
+        # 3. 验证结果
+        assert result.text is not None
+        assert len(result.text) > 0
+        assert result.language == "en"
+        assert result.confidence > 0.8
+        
+        return True
+    
+    async def _test_cost_control(self):
+        """测试成本控制模块"""
+        # 1. 设置测试预算
+        budget_manager = BudgetManager()
+        await budget_manager.set_monthly_budget(10.0)
+        
+        # 2. 测试预算检查
+        can_use = await budget_manager.enforce_budget_limits("deepseek", 5.0)
+        assert can_use == True
+        
+        # 3. 测试预算超限
+        can_use = await budget_manager.enforce_budget_limits("deepseek", 15.0)
+        assert can_use == False
+        
+        return True
+```
+
+### 13.3 集成测试方案
+```python
+# test_integration.py
+class IntegrationTests:
+    def __init__(self):
+        self.test_environment = TestEnvironment()
+        self.api_client = APIClient()
+    
+    async def test_full_pipeline(self):
+        """测试完整的处理流程"""
+        try:
+            # 1. 上传测试视频
+            test_video = self.test_data_manager.get_test_video("sample.mp4")
+            upload_response = await self.api_client.upload_media(test_video)
+            media_id = upload_response.media_id
+            
+            # 2. 启动处理流程
+            process_response = await self.api_client.start_processing(media_id)
+            
+            # 3. 监控处理进度
+            while True:
+                status = await self.api_client.get_processing_status(media_id)
+                if status.status in ["completed", "failed"]:
+                    break
+                await asyncio.sleep(1)
+            
+            # 4. 验证处理结果
+            assert status.status == "completed"
+            
+            # 5. 检查生成的文件
+            result_files = await self.api_client.get_result_files(media_id)
+            assert len(result_files) > 0
+            
+            return TestResult("full_pipeline", success=True)
+            
+        except Exception as e:
+            return TestResult("full_pipeline", success=False, error=str(e))
+    
+    async def test_voice_cloning_integration(self):
+        """测试声音克隆集成"""
+        try:
+            # 1. 上传测试音频
+            test_audio = self.test_data_manager.get_test_audio("voice_sample.wav")
+            
+            # 2. 创建角色
+            character_data = {
+                "name": "TestCharacter",
+                "gender": "male",
+                "audio_samples": [test_audio]
+            }
+            
+            character = await self.api_client.create_character(character_data)
+            
+            # 3. 克隆声音
+            clone_result = await self.api_client.clone_voice(character.id)
+            
+            # 4. 验证克隆结果
+            assert clone_result.success == True
+            assert clone_result.quality_score > 0.7
+            
+            # 5. 测试语音合成
+            synthesis_result = await self.api_client.synthesize_speech(
+                text="这是一个测试文本",
+                character_id=character.id
+            )
+            
+            assert synthesis_result.audio_path is not None
+            assert os.path.exists(synthesis_result.audio_path)
+            
+            return TestResult("voice_cloning_integration", success=True)
+            
+        except Exception as e:
+            return TestResult("voice_cloning_integration", success=False, error=str(e))
+    
+    async def test_cost_control_integration(self):
+        """测试成本控制集成"""
+        try:
+            # 1. 设置测试预算
+            await self.api_client.set_budget(5.0)
+            
+            # 2. 执行多个付费操作
+            total_cost = 0
+            for i in range(10):
+                # 模拟API调用
+                cost = 0.6
+                total_cost += cost
+                
+                # 检查预算限制
+                can_proceed = await self.api_client.check_budget_limit(cost)
+                
+                if total_cost > 5.0:
+                    assert can_proceed == False
+                    break
+                else:
+                    assert can_proceed == True
+            
+            return TestResult("cost_control_integration", success=True)
+            
+        except Exception as e:
+            return TestResult("cost_control_integration", success=False, error=str(e))
+```
+
+### 13.4 性能测试方案
+```python
+# test_performance.py
+class PerformanceTests:
+    def __init__(self):
+        self.performance_monitor = PerformanceMonitor()
+        self.benchmark_runner = BenchmarkRunner()
+    
+    async def test_processing_speed(self):
+        """测试处理速度"""
+        test_videos = [
+            ("short_video.mp4", 60),      # 1分钟视频
+            ("medium_video.mp4", 600),    # 10分钟视频
+            ("long_video.mp4", 3600)      # 1小时视频
+        ]
+        
+        results = []
+        for video_name, duration in test_videos:
+            try:
+                # 1. 记录开始时间
+                start_time = time.time()
+                
+                # 2. 执行处理
+                video_path = self.test_data_manager.get_test_video(video_name)
+                result = await self._process_video(video_path)
+                
+                # 3. 记录结束时间
+                end_time = time.time()
+                processing_time = end_time - start_time
+                
+                # 4. 计算性能指标
+                speed_ratio = duration / processing_time
+                
+                # 5. 验证性能要求
+                # 要求：1小时视频在45分钟内完成
+                expected_max_time = duration * 0.75
+                assert processing_time <= expected_max_time
+                
+                results.append(PerformanceResult(
+                    test_name=f"processing_speed_{video_name}",
+                    video_duration=duration,
+                    processing_time=processing_time,
+                    speed_ratio=speed_ratio,
+                    success=True
+                ))
+                
+            except Exception as e:
+                results.append(PerformanceResult(
+                    test_name=f"processing_speed_{video_name}",
+                    success=False,
+                    error=str(e)
+                ))
+        
+        return results
+    
+    async def test_memory_usage(self):
+        """测试内存使用"""
+        try:
+            # 1. 记录初始内存
+            initial_memory = psutil.virtual_memory().used / 1024**3  # GB
+            
+            # 2. 处理大文件
+            large_video = self.test_data_manager.get_test_video("large_video.mp4")
+            await self._process_video(large_video)
+            
+            # 3. 记录峰值内存
+            peak_memory = self.performance_monitor.get_peak_memory_usage()
+            
+            # 4. 验证内存要求
+            # 要求：峰值内存使用不超过6GB
+            assert peak_memory <= 6.0
+            
+            # 5. 检查内存泄漏
+            # 等待垃圾回收
+            time.sleep(10)
+            final_memory = psutil.virtual_memory().used / 1024**3
+            
+            # 内存增长不应超过100MB
+            memory_growth = final_memory - initial_memory
+            assert memory_growth <= 0.1
+            
+            return PerformanceResult(
+                test_name="memory_usage",
+                initial_memory=initial_memory,
+                peak_memory=peak_memory,
+                final_memory=final_memory,
+                memory_growth=memory_growth,
+                success=True
+            )
+            
+        except Exception as e:
+            return PerformanceResult(
+                test_name="memory_usage",
+                success=False,
+                error=str(e)
+            )
+    
+    async def test_concurrent_processing(self):
+        """测试并发处理能力"""
+        try:
+            # 1. 准备多个测试文件
+            test_files = [
+                self.test_data_manager.get_test_video(f"concurrent_test_{i}.mp4")
+                for i in range(3)
+            ]
+            
+            # 2. 并发启动处理
+            start_time = time.time()
+            tasks = []
+            for video_file in test_files:
+                task = asyncio.create_task(self._process_video(video_file))
+                tasks.append(task)
+            
+            # 3. 等待所有任务完成
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # 4. 记录总时间
+            total_time = time.time() - start_time
+            
+            # 5. 验证结果
+            success_count = sum(1 for r in results if not isinstance(r, Exception))
+            assert success_count == len(test_files)
+            
+            return PerformanceResult(
+                test_name="concurrent_processing",
+                total_files=len(test_files),
+                success_count=success_count,
+                total_time=total_time,
+                success=True
+            )
+            
+        except Exception as e:
+            return PerformanceResult(
+                test_name="concurrent_processing",
+                success=False,
+                error=str(e)
+            )
+```
+
+### 13.5 自动化测试框架
+```python
+# test_framework.py
+class AutomatedTestFramework:
+    def __init__(self):
+        self.test_config = TestConfig()
+        self.test_scheduler = TestScheduler()
+        self.test_reporter = TestReporter()
+        self.notification_service = NotificationService()
+    
+    async def run_scheduled_tests(self):
+        """运行定期测试"""
+        try:
+            # 1. 检查是否需要运行测试
+            if not await self.test_scheduler.should_run_tests():
+                return
+            
+            # 2. 运行完整测试套件
+            test_report = await self.run_full_test_suite()
+            
+            # 3. 分析测试结果
+            analysis = await self._analyze_test_results(test_report)
+            
+            # 4. 发送通知
+            if analysis.has_failures:
+                await self.notification_service.send_test_failure_notification(
+                    test_report, analysis
+                )
+            else:
+                await self.notification_service.send_test_success_notification(test_report)
+            
+            # 5. 保存测试报告
+            await self.test_reporter.save_report(test_report)
+            
+        except Exception as e:
+            await self.notification_service.send_test_error_notification(str(e))
+    
+    async def run_ci_tests(self, commit_hash: str) -> TestReport:
+        """运行CI测试"""
+        try:
+            # 1. 设置测试环境
+            await self._setup_ci_environment(commit_hash)
+            
+            # 2. 运行核心测试
+            core_tests = [
+                'unit_tests',
+                'integration_tests',
+                'critical_performance_tests'
+            ]
+            
+            test_report = await self.run_selected_tests(core_tests)
+            
+            # 3. 判断是否通过CI
+            ci_passed = self._evaluate_ci_results(test_report)
+            
+            # 4. 更新CI状态
+            await self._update_ci_status(commit_hash, ci_passed, test_report)
+            
+            return test_report
+            
+        except Exception as e:
+            logger.error(f"CI测试失败: {e}")
+            raise
+    
+    async def run_regression_tests(self, version: str) -> TestReport:
+        """运行回归测试"""
+        try:
+            # 1. 加载历史测试结果
+            historical_results = await self.test_reporter.load_historical_results()
+            
+            # 2. 运行回归测试
+            regression_report = await self.run_full_test_suite()
+            
+            # 3. 比较结果
+            comparison = await self._compare_test_results(
+                historical_results, regression_report
+            )
+            
+            # 4. 识别回归问题
+            regressions = self._identify_regressions(comparison)
+            
+            if regressions:
+                await self.notification_service.send_regression_alert(
+                    version, regressions
+                )
+            
+            return regression_report
+            
+        except Exception as e:
+            logger.error(f"回归测试失败: {e}")
+            raise
+```
+
+### 13.6 测试数据管理
+```python
+# test_data_manager.py
+class TestDataManager:
+    def __init__(self):
+        self.test_data_repo = TestDataRepository()
+        self.data_generator = TestDataGenerator()
+    
+    async def setup_test_data(self):
+        """设置测试数据"""
+        try:
+            # 1. 生成测试视频
+            await self.data_generator.generate_test_videos()
+            
+            # 2. 生成测试音频
+            await self.data_generator.generate_test_audio()
+            
+            # 3. 生成测试字幕
+            await self.data_generator.generate_test_subtitles()
+            
+            # 4. 设置测试数据库
+            await self._setup_test_database()
+            
+            # 5. 验证测试数据完整性
+            await self._validate_test_data_integrity()
+            
+        except Exception as e:
+            logger.error(f"测试数据设置失败: {e}")
+            raise
+    
+    async def cleanup_test_data(self):
+        """清理测试数据"""
+        try:
+            # 1. 清理生成的文件
+            await self._cleanup_generated_files()
+            
+            # 2. 重置测试数据库
+            await self._reset_test_database()
+            
+            # 3. 清理缓存
+            await self._cleanup_test_cache()
+            
+        except Exception as e:
+            logger.error(f"测试数据清理失败: {e}")
+```
+
+### 13.7 测试报告生成
+```python
+# test_reporter.py
+class TestReporter:
+    def __init__(self):
+        self.report_template = TestReportTemplate()
+        self.exporter = TestReportExporter()
+    
+    async def generate_comprehensive_report(self, test_results: Dict) -> TestReport:
+        """生成综合测试报告"""
+        try:
+            # 1. 分析测试结果
+            analysis = await self._analyze_test_results(test_results)
+            
+            # 2. 生成报告内容
+            report_content = await self.report_template.generate_report(
+                test_results=test_results,
+                analysis=analysis,
+                generated_at=datetime.now()
+            )
+            
+            # 3. 导出多种格式
+            await self.exporter.export_html_report(report_content)
+            await self.exporter.export_json_report(report_content)
+            await self.exporter.export_pdf_report(report_content)
+            
+            return TestReport(
+                content=report_content,
+                summary=analysis.summary,
+                success_rate=analysis.success_rate,
+                generated_at=datetime.now()
+            )
+            
+        except Exception as e:
+            logger.error(f"测试报告生成失败: {e}")
+            raise
+    
+    async def _analyze_test_results(self, test_results: Dict) -> TestAnalysis:
+        """分析测试结果"""
+        total_tests = 0
+        passed_tests = 0
+        failed_tests = 0
+        errors = []
+        
+        # 统计各类型测试结果
+        for test_type, results in test_results.items():
+            for result in results:
+                total_tests += 1
+                if result.success:
+                    passed_tests += 1
+                else:
+                    failed_tests += 1
+                    errors.append({
+                        'test_type': test_type,
+                        'test_name': result.name,
+                        'error': result.error
+                    })
+        
+        # 计算成功率
+        success_rate = (passed_tests / total_tests) * 100 if total_tests > 0 else 0
+        
+        # 生成摘要
+        summary = f"总测试数: {total_tests}, 通过: {passed_tests}, 失败: {failed_tests}, 成功率: {success_rate:.1f}%"
+        
+        return TestAnalysis(
+            total_tests=total_tests,
+            passed_tests=passed_tests,
+            failed_tests=failed_tests,
+            success_rate=success_rate,
+            errors=errors,
+            summary=summary
+        )
+```
