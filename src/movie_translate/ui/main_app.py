@@ -38,8 +38,8 @@ class MovieTranslateApp(ctk.CTk):
         
         # Configure window
         self.title("Movie Translate - 电影翻译配音工具")
-        self.geometry("1200x800")
-        self.minsize(1000, 700)
+        self.geometry("1400x1200")
+        self.minsize(1200, 800)
         
         # Set appearance
         ctk.set_appearance_mode("System")
@@ -354,26 +354,28 @@ class MovieTranslateApp(ctk.CTk):
         name_entry = ctk.CTkEntry(dialog, width=300)
         name_entry.grid(row=0, column=1, padx=20, pady=10)
         
-        # Video file
-        video_label = ctk.CTkLabel(dialog, text="视频文件:")
-        video_label.grid(row=1, column=0, padx=20, pady=10, sticky="w")
+        # Media file (video or audio)
+        media_label = ctk.CTkLabel(dialog, text="媒体文件:")
+        media_label.grid(row=1, column=0, padx=20, pady=10, sticky="w")
         
-        video_path = tk.StringVar()
-        video_entry = ctk.CTkEntry(dialog, width=250, textvariable=video_path)
-        video_entry.grid(row=1, column=1, padx=20, pady=10, sticky="w")
+        media_path = tk.StringVar()
+        media_entry = ctk.CTkEntry(dialog, width=250, textvariable=media_path)
+        media_entry.grid(row=1, column=1, padx=20, pady=10, sticky="w")
         
-        def browse_video():
+        def browse_media():
             file_path = filedialog.askopenfilename(
-                title="选择视频文件",
+                title="选择媒体文件",
                 filetypes=[
-                    ("视频文件", "*.mp4 *.avi *.mkv *.mov *.wmv"),
+                    ("所有媒体文件", "*.mp4 *.avi *.mkv *.mov *.wmv *.flv *.webm *.mp3 *.wav *.flac *.aac *.ogg *.m4a *.wma"),
+                    ("视频文件", "*.mp4 *.avi *.mkv *.mov *.wmv *.flv *.webm"),
+                    ("音频文件", "*.mp3 *.wav *.flac *.aac *.ogg *.m4a *.wma"),
                     ("所有文件", "*.*")
                 ]
             )
             if file_path:
-                video_path.set(file_path)
+                media_path.set(file_path)
         
-        browse_btn = ctk.CTkButton(dialog, text="浏览", command=browse_video)
+        browse_btn = ctk.CTkButton(dialog, text="浏览", command=browse_media)
         browse_btn.grid(row=1, column=2, padx=10, pady=10)
         
         # Target language
@@ -391,15 +393,15 @@ class MovieTranslateApp(ctk.CTk):
         
         def create_project():
             project_name = name_entry.get().strip()
-            video_file = video_path.get()
+            media_file = media_path.get()
             target_lang = lang_var.get()
             
             if not project_name:
                 messagebox.showerror("错误", "请输入项目名称")
                 return
             
-            if not video_file:
-                messagebox.showerror("错误", "请选择视频文件")
+            if not media_file:
+                messagebox.showerror("错误", "请选择媒体文件")
                 return
             
             def on_project_created(result, error):
@@ -414,7 +416,7 @@ class MovieTranslateApp(ctk.CTk):
             async def create():
                 return await self.project_manager.create_project(
                     name=project_name,
-                    video_path=video_file,
+                    video_path=media_file,
                     target_language=target_lang
                 )
             
