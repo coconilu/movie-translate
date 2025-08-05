@@ -267,6 +267,13 @@ class MovieTranslateApp(ctk.CTk):
     
     def _initialize_components(self):
         """Initialize UI components"""
+        # Initialize basic managers early
+        self.api_client = APIClient()
+        self.project_manager = ProjectManager(self.api_client)
+        
+        # Setup async event loop early
+        self._setup_async_loop()
+        
         # Initialize all frames
         self.frames = {}
         
@@ -323,6 +330,12 @@ class MovieTranslateApp(ctk.CTk):
     def run_async(self, coro, callback=None):
         """Run async coroutine from main thread without blocking"""
         if not self.async_loop or not self.async_loop.is_running():
+            # If async loop is not ready, show error message
+            logger.warning("Async loop not ready, showing error message")
+            if callback:
+                self.after(0, lambda: callback(None, Exception("异步系统未就绪，请稍后再试")))
+            else:
+                logger.error("Async loop not ready when trying to run task")
             return
         
         def on_complete(future):
@@ -343,7 +356,7 @@ class MovieTranslateApp(ctk.CTk):
         """Create new project"""
         dialog = ctk.CTkToplevel(self)
         dialog.title("新建项目")
-        dialog.geometry("400x300")
+        dialog.geometry("800x300")
         dialog.transient(self)
         dialog.grab_set()
         
@@ -414,9 +427,9 @@ class MovieTranslateApp(ctk.CTk):
                     dialog.destroy()
             
             async def create():
-                return await self.project_manager.create_project(
+                return await self.project_manager.create_new_project(
                     name=project_name,
-                    video_path=media_file,
+                    source_file_path=media_file,
                     target_language=target_lang
                 )
             
@@ -758,14 +771,11 @@ Movie Translate 使用指南
                 logger.error(f"Failed to initialize database: {e}")
                 messagebox.showerror("数据库错误", f"数据库初始化失败: {e}")
             
-            # Initialize API client
-            logger.info("Initializing API client...")
-            self.api_client = APIClient()
-            self.project_manager = ProjectManager(self.api_client)
+            # API client and project manager already initialized in _initialize_components
+            logger.info("API client and project manager already initialized")
             
-            # Setup async event loop
-            logger.info("Setting up async event loop...")
-            self._setup_async_loop()
+            # Async event loop already initialized in _initialize_components
+            logger.info("Async event loop already initialized")
             
             # Start interrupt recovery
             logger.info("Starting interrupt recovery...")
