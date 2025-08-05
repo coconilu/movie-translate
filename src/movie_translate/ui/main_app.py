@@ -27,23 +27,14 @@ class MovieTranslateApp(ctk.CTk):
     """Main application window for Movie Translate"""
     
     def __init__(self):
-        super().__init__()
-        
-        # Initialize database
-        try:
-            initialize_database()
-            logger.info("Database initialized successfully")
-        except Exception as e:
-            logger.error(f"Failed to initialize database: {e}")
-            messagebox.showerror("数据库错误", f"数据库初始化失败: {e}")
-        
-        # Initialize API client
-        self.api_client = APIClient()
-        self.project_manager = ProjectManager(self.api_client)
-        
-        # Current project data
+        # Initialize basic attributes first
         self.current_project = None
         self.current_step = 0
+        self.async_loop = None
+        self.async_thread = None
+        
+        # Initialize the window first
+        super().__init__()
         
         # Configure window
         self.title("Movie Translate - 电影翻译配音工具")
@@ -58,7 +49,7 @@ class MovieTranslateApp(ctk.CTk):
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
         
-        # Create UI components
+        # Create UI components first
         self._create_sidebar()
         self._create_main_content()
         self._create_status_bar()
@@ -66,14 +57,8 @@ class MovieTranslateApp(ctk.CTk):
         # Initialize components
         self._initialize_components()
         
-        # Setup async event loop
-        self._setup_async_loop()
-        
-        # Start interrupt recovery
-        self._start_interrupt_recovery()
-        
-        # Check for recovery data
-        self._check_recovery()
+        # Initialize heavy components after UI is ready
+        self.after(100, self._initialize_heavy_components)
         
         logger.info("Main UI application initialized")
     
@@ -309,15 +294,22 @@ class MovieTranslateApp(ctk.CTk):
     
     def _check_api_connection(self):
         """Check API connection status"""
+        def on_connection_result(result, error):
+            if error:
+                logger.warning(f"API connection failed: {error}")
+                self._update_connection_status(False)
+            else:
+                self._update_connection_status(True)
+        
         async def check_connection():
             try:
-                await self.api_client.health_check()
-                self._update_connection_status(True)
+                # Create a session for this check
+                async with self.api_client:
+                    return await self.api_client.health_check()
             except Exception as e:
-                logger.warning(f"API connection failed: {e}")
-                self._update_connection_status(False)
+                raise e
         
-        self.run_async(check_connection())
+        self.run_async(check_connection(), on_connection_result)
         # Check every 30 seconds
         self.after(30000, self._check_api_connection)
     
@@ -328,13 +320,24 @@ class MovieTranslateApp(ctk.CTk):
         else:
             self.connection_status_label.configure(text="API: 未连接", text_color="red")
     
-    def run_async(self, coro):
-        """Run async coroutine from main thread"""
-        if not self.async_loop.is_running():
+    def run_async(self, coro, callback=None):
+        """Run async coroutine from main thread without blocking"""
+        if not self.async_loop or not self.async_loop.is_running():
             return
         
+        def on_complete(future):
+            try:
+                result = future.result()
+                if callback:
+                    self.after(0, lambda: callback(result, None))
+            except Exception as e:
+                if callback:
+                    self.after(0, lambda: callback(None, e))
+                else:
+                    logger.error(f"Async task failed: {e}")
+        
         future = asyncio.run_coroutine_threadsafe(coro, self.async_loop)
-        return future.result()
+        future.add_done_callback(on_complete)
     
     def _new_project(self):
         """Create new project"""
@@ -399,21 +402,23 @@ class MovieTranslateApp(ctk.CTk):
                 messagebox.showerror("错误", "请选择视频文件")
                 return
             
-            async def create():
-                try:
-                    project = await self.project_manager.create_project(
-                        name=project_name,
-                        video_path=video_file,
-                        target_language=target_lang
-                    )
-                    self.current_project = project
+            def on_project_created(result, error):
+                if error:
+                    messagebox.showerror("错误", f"创建项目失败: {error}")
+                else:
+                    self.current_project = result
                     self._update_project_display()
                     self._navigate_to_step(0)
                     dialog.destroy()
-                except Exception as e:
-                    messagebox.showerror("错误", f"创建项目失败: {e}")
             
-            self.run_async(create())
+            async def create():
+                return await self.project_manager.create_project(
+                    name=project_name,
+                    video_path=video_file,
+                    target_language=target_lang
+                )
+            
+            self.run_async(create(), on_project_created)
         
         create_btn = ctk.CTkButton(button_frame, text="创建", command=create_project)
         create_btn.grid(row=0, column=0, padx=10)
@@ -440,16 +445,18 @@ class MovieTranslateApp(ctk.CTk):
         )
         
         if file_path:
-            async def open_project():
-                try:
-                    project = await self.project_manager.load_project(file_path)
-                    self.current_project = project
+            def on_project_opened(result, error):
+                if error:
+                    messagebox.showerror("错误", f"打开项目失败: {error}")
+                else:
+                    self.current_project = result
                     self._update_project_display()
                     self._navigate_to_step(0)
-                except Exception as e:
-                    messagebox.showerror("错误", f"打开项目失败: {e}")
             
-            self.run_async(open_project())
+            async def open_project():
+                return await self.project_manager.load_project(file_path)
+            
+            self.run_async(open_project(), on_project_opened)
     
     def _save_project(self):
         """Save current project"""
@@ -466,14 +473,17 @@ class MovieTranslateApp(ctk.CTk):
         )
         
         if file_path:
-            async def save_project():
-                try:
-                    await self.project_manager.save_project(file_path)
+            def on_project_saved(result, error):
+                if error:
+                    messagebox.showerror("错误", f"保存项目失败: {error}")
+                else:
                     messagebox.showinfo("成功", "项目保存成功")
-                except Exception as e:
-                    messagebox.showerror("错误", f"保存项目失败: {e}")
             
-            self.run_async(save_project())
+            async def save_project():
+                await self.project_manager.save_project(file_path)
+                return True
+            
+            self.run_async(save_project(), on_project_saved)
     
     def _export_video(self):
         """Export final video"""
@@ -492,23 +502,24 @@ class MovieTranslateApp(ctk.CTk):
         )
         
         if file_path:
-            async def export_video():
-                try:
-                    self.progress_display.show("正在导出视频...")
-                    self.progress_display.update_progress(0, "开始导出")
-                    
-                    # Export video using API
-                    result = await self.project_manager.export_video(file_path)
-                    
+            def on_video_exported(result, error):
+                if error:
+                    self.progress_display.hide()
+                    messagebox.showerror("错误", f"导出视频失败: {error}")
+                else:
                     self.progress_display.update_progress(100, "导出完成")
                     messagebox.showinfo("成功", f"视频导出成功: {file_path}")
-                    
                     self.progress_display.hide()
-                except Exception as e:
-                    self.progress_display.hide()
-                    messagebox.showerror("错误", f"导出视频失败: {e}")
             
-            self.run_async(export_video())
+            async def export_video():
+                self.progress_display.show("正在导出视频...")
+                self.progress_display.update_progress(0, "开始导出")
+                
+                # Export video using API
+                result = await self.project_manager.export_video(file_path)
+                return result
+            
+            self.run_async(export_video(), on_video_exported)
     
     def _open_settings(self):
         """Open settings dialog"""
@@ -626,15 +637,19 @@ Movie Translate 使用指南
             elif result is None:  # Cancel
                 return
         
-        # Clean up
-        if self.async_loop and self.async_loop.is_running():
-            self.async_loop.call_soon_threadsafe(self.async_loop.stop)
+        # Save current state before closing
+        self._save_current_state()
         
         # Stop interrupt recovery
         self._stop_interrupt_recovery()
         
-        # Save current state before closing
-        self._save_current_state()
+        # Clean up async loop
+        if self.async_loop and self.async_loop.is_running():
+            self.async_loop.call_soon_threadsafe(self.async_loop.stop)
+        
+        # Wait for async thread to finish
+        if self.async_thread and self.async_thread.is_alive():
+            self.async_thread.join(timeout=2.0)
         
         self.destroy()
     
@@ -729,6 +744,44 @@ Movie Translate 使用指南
         except Exception as e:
             logger.error(f"Failed to start interrupt recovery: {e}")
     
+    def _initialize_heavy_components(self):
+        """Initialize heavy components after UI is ready"""
+        try:
+            # Initialize database
+            logger.info("Initializing database...")
+            try:
+                initialize_database()
+                logger.info("Database initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize database: {e}")
+                messagebox.showerror("数据库错误", f"数据库初始化失败: {e}")
+            
+            # Initialize API client
+            logger.info("Initializing API client...")
+            self.api_client = APIClient()
+            self.project_manager = ProjectManager(self.api_client)
+            
+            # Setup async event loop
+            logger.info("Setting up async event loop...")
+            self._setup_async_loop()
+            
+            # Start interrupt recovery
+            logger.info("Starting interrupt recovery...")
+            self._start_interrupt_recovery()
+            
+            # Check for recovery data
+            logger.info("Checking for recovery data...")
+            self._check_recovery()
+            
+            # Schedule connection check
+            self.after(2000, self._check_api_connection)
+            
+            logger.info("Heavy components initialization completed")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize heavy components: {e}")
+            messagebox.showerror("初始化错误", f"组件初始化失败: {e}")
+
     def _stop_interrupt_recovery(self):
         """Stop interrupt recovery auto-save"""
         try:
